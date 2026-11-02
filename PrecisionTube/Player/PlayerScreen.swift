@@ -13,6 +13,8 @@ struct PlayerScreen: View {
     @State private var renaming: VideoMarker?
     @State private var renameText = ""
     @State private var overlayVisible = true
+    /// Landscape: frame buttons that stay on the left and right edges of the screen.
+    @AppStorage("edgeFrameButtons") private var edgeButtons = false
     @State private var lastInteraction = Date()
 
     private var markers: [VideoMarker] {
@@ -96,6 +98,7 @@ struct PlayerScreen: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
             errorOverlay
+            if edgeButtons { edgeFrameButtons }
             if overlayVisible {
                 landscapeControls
                     .transition(.opacity)
@@ -108,6 +111,18 @@ struct PlayerScreen: View {
             HStack(spacing: 14) {
                 Text(navTitle).font(.headline).lineLimit(1)
                 Spacer()
+                if player.playlistID != nil {
+                    Button { player.previousVideo() } label: { Image(systemName: "backward.end.fill") }
+                        .disabled((player.playlistIndex ?? 0) == 0)
+                    if let i = player.playlistIndex {
+                        Text(player.playlistCount.map { "\(i + 1)/\($0)" } ?? "\(i + 1)").font(.caption.monospacedDigit())
+                    }
+                    Button { player.nextVideo() } label: { Image(systemName: "forward.end.fill") }
+                }
+                Button { edgeButtons.toggle() } label: {
+                    Image(systemName: edgeButtons ? "arrow.left.and.right.circle.fill" : "arrow.left.and.right.circle")
+                }
+                .accessibilityLabel("Frame buttons on the edges")
                 markButton
                 optionsMenu.font(.title3)
             }
@@ -166,6 +181,38 @@ struct PlayerScreen: View {
         }
         .environment(\.colorScheme, .dark)
         .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in lastInteraction = Date() })
+    }
+
+    /// See-through frame buttons hugging the left and right edges; they stay when the rest fades.
+    private var edgeFrameButtons: some View {
+        HStack {
+            VStack(spacing: 10) {
+                RepeatButton(action: { player.step(frames: -stepSize) }, translucent: true, fillHeight: true) {
+                    Image(systemName: "backward.frame.fill").font(.title)
+                }
+                .frame(width: 78, height: 170)
+                RepeatButton(action: { player.jump(seconds: -1) }, translucent: true) {
+                    Text("−1s").font(.subheadline.weight(.semibold))
+                }
+                .frame(width: 78)
+            }
+            Spacer()
+            VStack(spacing: 10) {
+                RepeatButton(action: { player.step(frames: stepSize) }, translucent: true, fillHeight: true) {
+                    Image(systemName: "forward.frame.fill").font(.title)
+                }
+                .frame(width: 78, height: 170)
+                RepeatButton(action: { player.jump(seconds: 1) }, translucent: true) {
+                    Text("+1s").font(.subheadline.weight(.semibold))
+                }
+                .frame(width: 78)
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.bottom, overlayVisible ? 170 : 0)
+        .opacity(0.85)
+        .environment(\.colorScheme, .dark)
+        .animation(.easeInOut(duration: 0.25), value: overlayVisible)
     }
 
     private var markButton: some View {
@@ -254,12 +301,38 @@ struct PlayerScreen: View {
 
     private var controls: some View {
         VStack(spacing: 14) {
+            playlistBar
             transport
             stepAndSpeed
             loopSection
             markerSection
             RowCounterStrip()
             infoSection
+        }
+    }
+
+    @ViewBuilder
+    private var playlistBar: some View {
+        if player.playlistID != nil {
+            HStack(spacing: 10) {
+                Button { player.previousVideo() } label: { Image(systemName: "backward.end.fill").frame(width: 34, height: 30) }
+                    .buttonStyle(.bordered)
+                    .disabled((player.playlistIndex ?? 0) == 0)
+                VStack(spacing: 1) {
+                    Text("Playlist").font(.caption.weight(.semibold))
+                    if let i = player.playlistIndex {
+                        Text(player.playlistCount.map { "Video \(i + 1) of \($0)" } ?? "Video \(i + 1)")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    } else {
+                        Text("Plays on to the next video").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                Button { player.nextVideo() } label: { Image(systemName: "forward.end.fill").frame(width: 34, height: 30) }
+                    .buttonStyle(.bordered)
+            }
+            .padding(8)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
         }
     }
 
@@ -431,6 +504,7 @@ struct PlayerScreen: View {
                         }
                     }
                     Toggle("Mute", isOn: $player.muted)
+                    Toggle("Frame buttons on the edges (landscape)", isOn: $edgeButtons)
                     Toggle("Tap through to YouTube", isOn: $interactWithYouTube)
                     if let id = player.videoID {
                         Button {
@@ -544,6 +618,7 @@ struct VideoSurface: UIViewRepresentable {
 struct RepeatButton<Content: View>: View {
     let action: @MainActor () -> Void
     var translucent = false
+    var fillHeight = false
     @ViewBuilder let label: () -> Content
 
     @State private var pressed = false
@@ -551,7 +626,7 @@ struct RepeatButton<Content: View>: View {
 
     var body: some View {
         label()
-            .frame(maxWidth: .infinity, minHeight: 56)
+            .frame(maxWidth: .infinity, minHeight: 56, maxHeight: fillHeight ? .infinity : nil)
             .foregroundStyle(Color.accentColor)
             .background(RoundedRectangle(cornerRadius: 12)
                 .fill(pressed ? Color.accentColor.opacity(0.3) : Color(.secondarySystemBackground).opacity(translucent ? 0.55 : 1)))
@@ -649,7 +724,8 @@ struct PasteLinkButton: View {
                 Task { @MainActor in
                     if let id = YouTube.videoID(from: text) {
                         failed = false
-                        app.open(videoID: id, store: store, start: YouTube.startTime(from: text))
+                        app.open(videoID: id, store: store, start: YouTube.startTime(from: text),
+                                 playlist: YouTube.playlistID(from: text), index: YouTube.playlistIndex(from: text))
                     } else {
                         failed = true
                     }

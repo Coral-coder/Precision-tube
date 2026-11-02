@@ -33,6 +33,14 @@ final class PlayerController: NSObject, ObservableObject {
     /// Called with (videoID, position) when it's worth remembering where we are.
     var onSavePosition: ((String, Double) -> Void)?
     var onSaveFPS: ((String, Double?) -> Void)?
+    /// A playlist moved on to another video: (video ID, playlist ID, index). Returns that video's
+    /// saved frame-rate override, if any.
+    var onVideoChanged: ((String, String?, Int?) -> Double?)?
+
+    /// The YouTube playlist being played, if any, and where in it we are (0-based).
+    @Published private(set) var playlistID: String?
+    @Published private(set) var playlistIndex: Int?
+    @Published private(set) var playlistCount: Int?
 
     var fps: Double { fpsOverride ?? detectedFPS ?? 30 }
     var frameDuration: Double { 1 / fps }
@@ -77,9 +85,12 @@ final class PlayerController: NSObject, ObservableObject {
 
     // MARK: Commands
 
-    func load(videoID: String, start: Double, fpsOverride: Double? = nil) {
+    func load(videoID: String, start: Double, fpsOverride: Double? = nil, playlist: String? = nil, index: Int? = nil) {
         if let old = self.videoID, old != videoID { savePosition(force: true) }
         self.videoID = videoID
+        playlistID = playlist
+        playlistIndex = index
+        playlistCount = nil
         currentTime = start
         duration = 0
         isPlaying = false
@@ -106,6 +117,8 @@ final class PlayerController: NSObject, ObservableObject {
             .replacingOccurrences(of: "__VIDEO_ID__", with: videoID)
             .replacingOccurrences(of: "__START__", with: String(format: "%.3f", currentTime))
             .replacingOccurrences(of: "__ORIGIN__", with: Self.origin)
+            .replacingOccurrences(of: "__LIST__", with: (playlistID ?? "").filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" })
+            .replacingOccurrences(of: "__INDEX__", with: String(playlistIndex ?? -1))
         webView.loadHTMLString(html, baseURL: URL(string: Self.origin + "/"))
         // If the script inside YouTube's frame never reports in, load the embed page directly.
         fallbackTask = Task { [weak self] in
@@ -127,8 +140,10 @@ final class PlayerController: NSObject, ObservableObject {
             URLQueryItem(name: "rel", value: "0"), URLQueryItem(name: "iv_load_policy", value: "3"),
             URLQueryItem(name: "fs", value: "0"), URLQueryItem(name: "disablekb", value: "1"),
             URLQueryItem(name: "start", value: String(Int(currentTime))),
+            URLQueryItem(name: "list", value: playlistID), URLQueryItem(name: "index", value: playlistIndex.map { String($0) }),
             URLQueryItem(name: "origin", value: Self.origin), URLQueryItem(name: "widget_referrer", value: Self.origin),
         ]
+        comps.queryItems = comps.queryItems?.filter { $0.value != nil }
         var request = URLRequest(url: comps.url!)
         request.setValue(Self.origin + "/", forHTTPHeaderField: "Referer")
         webView.load(request)
@@ -167,6 +182,9 @@ final class PlayerController: NSObject, ObservableObject {
 
     func jump(seconds: Double) { seek(to: currentTime + seconds) }
 
+    func nextVideo() { js("ptNext()") }
+    func previousVideo() { js("ptPrev()") }
+
     func seek(to time: Double) {
         let t = max(0, duration > 0 ? min(time, duration - 0.01) : time)
         currentTime = t
@@ -188,7 +206,9 @@ final class PlayerController: NSObject, ObservableObject {
         guard let id = videoID else { return }
         if force || Date().timeIntervalSince(lastSaved) > 5 {
             lastSaved = Date()
-            onSavePosition?(id, currentTime)
+            // Finished (or nearly): next time, start from the beginning.
+            let position = duration > 0 && currentTime > duration - 2 ? 0 : currentTime
+            onSavePosition?(id, position)
         }
     }
 
@@ -238,6 +258,20 @@ final class PlayerController: NSObject, ObservableObject {
             if loopOn, playing, let a = loopA, let b = loopB, b > a, t >= b { seek(to: a) }
         case "fps":
             if let raw = msg["fps"] as? Double { detectedFPS = Self.snap(fps: raw) }
+        case "video":
+            guard let id = msg["id"] as? String, !id.isEmpty else { break }
+            if let i = msg["index"] as? Int, i >= 0 { playlistIndex = i }
+            if let c = msg["count"] as? Int, c > 0 { playlistCount = c }
+            guard id != videoID else { break }
+            // The playlist moved on: the new video gets its own place, marks and settings.
+            savePosition(force: true)
+            videoID = id
+            currentTime = 0
+            duration = 0
+            detectedFPS = nil
+            loopA = nil; loopB = nil; loopOn = false
+            fpsOverride = onVideoChanged?(id, playlistID, playlistIndex) ?? nil
+            if desiredRate != 1 { setRate(desiredRate) }
         case "ready":
             ready = true
             if desiredRate != 1, videoFrame == nil { js("ptRate(\(desiredRate))") }
@@ -400,8 +434,8 @@ final class PlayerController: NSObject, ObservableObject {
     </style></head>
     <body><div id="wrap"><div id="player"></div></div>
     <script>
-    var player=null, lastKey='';
-    var START=__START__;
+    var player=null, lastKey='', lastVid='', settleUntil=0;
+    var START=__START__, LIST='__LIST__', INDEX=__INDEX__, aligned=(LIST==='' || INDEX>=0);
     function post(m){ m.src='main'; try{ window.webkit.messageHandlers.pt.postMessage(m); }catch(e){} }
     function onYouTubeIframeAPIReady(){
       player=new YT.Player('player',{videoId:'__VIDEO_ID__', width:'100%', height:'100%',
@@ -409,10 +443,16 @@ final class PlayerController: NSObject, ObservableObject {
                     start:Math.floor(START), origin:'__ORIGIN__', widget_referrer:'__ORIGIN__'},
         events:{
           onReady:function(){
-            try{ player.playVideo(); }catch(e){}
-            setTimeout(function(){ try{ player.pauseVideo(); if (START>0) player.seekTo(START, true); }catch(e){} }, 400);
+            if (LIST){
+              // Play the whole playlist from this video; YouTube moves on to the next one by itself.
+              try{ player.loadPlaylist({list:LIST, listType:'playlist', index:Math.max(0,INDEX), startSeconds:START}); }catch(e){}
+              setTimeout(function(){ try{ if (aligned){ player.pauseVideo(); if (START>0) player.seekTo(START, true); } }catch(e){} }, 900);
+            } else {
+              try{ player.playVideo(); }catch(e){}
+              setTimeout(function(){ try{ player.pauseVideo(); if (START>0) player.seekTo(START, true); }catch(e){} }, 400);
+            }
             post({type:'ready'});
-            setInterval(function(){ report(false); }, 100);
+            setInterval(function(){ report(false); checkVideo(); }, 100);
           },
           onStateChange:function(){ report(true); },
           onError:function(e){ post({type:'error', code:e.data}); }
@@ -427,6 +467,31 @@ final class PlayerController: NSObject, ObservableObject {
       lastKey=key;
       post({type:'time', t:t, d:d||0, playing:playing, rate:rate});
     }
+    function checkVideo(){
+      if (!player || !player.getVideoData) return;
+      var pl=(player.getPlaylist && player.getPlaylist()) || [];
+      if (!aligned){
+        // The link had no index: find this video in the playlist and start there.
+        if (!pl.length) return;
+        aligned=true;
+        var i=pl.indexOf('__VIDEO_ID__');
+        if (i>0 && i!==player.getPlaylistIndex()){
+          player.playVideoAt(i);
+          settleUntil=Date.now()+2000;
+          setTimeout(function(){ try{ player.pauseVideo(); if (START>0) player.seekTo(START, true); }catch(e){} }, 900);
+          return;
+        }
+        setTimeout(function(){ try{ player.pauseVideo(); if (START>0) player.seekTo(START, true); }catch(e){} }, 300);
+      }
+      if (Date.now()<settleUntil) return;
+      var vd=player.getVideoData(), id=vd && vd.video_id;
+      if (id && id!==lastVid){
+        lastVid=id;
+        post({type:'video', id:id, index:(player.getPlaylistIndex ? player.getPlaylistIndex() : -1), count:pl.length});
+      }
+    }
+    function ptNext(){ if (player && player.nextVideo) player.nextVideo(); }
+    function ptPrev(){ if (player && player.previousVideo) player.previousVideo(); }
     function ptPlay(){ if (player) player.playVideo(); }
     function ptPause(){ if (player) player.pauseVideo(); }
     function ptSeek(t){ if (player){ player.seekTo(t, true); report(true); } }
