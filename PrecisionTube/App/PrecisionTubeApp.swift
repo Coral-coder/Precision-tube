@@ -4,6 +4,7 @@ import SwiftUI
 struct PrecisionTubeApp: App {
     @StateObject private var store = Store()
     @StateObject private var app = AppState()
+    @AppStorage(Theme.storageKey) private var themeHex = Theme.defaultHex
 
     var body: some Scene {
         WindowGroup {
@@ -11,7 +12,8 @@ struct PrecisionTubeApp: App {
                 .environmentObject(store)
                 .environmentObject(app)
                 .environmentObject(app.player)
-                .tint(.pink)
+                .tint(Theme.color(hex: themeHex))
+                .accentColor(Theme.color(hex: themeHex))
                 .onOpenURL { url in
                     if let id = YouTube.videoID(from: url.absoluteString) {
                         app.open(videoID: id, store: store)

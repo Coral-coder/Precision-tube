@@ -22,6 +22,13 @@ struct ToolsView: View {
                     NavigationLink { IncreaseEvenlyView() } label: { Label("Increase / decrease evenly", systemImage: "arrow.up.and.down.text.horizontal") }
                     NavigationLink { GaugeView() } label: { Label("Gauge calculator", systemImage: "ruler") }
                 }
+                Section {
+                    ThemeColorPicker()
+                } header: {
+                    Text("App color")
+                } footer: {
+                    Text("Buttons, highlights and the timeline use this color.")
+                }
                 Section("Charts") {
                     NavigationLink { HookSizesView() } label: { Label("Hook & needle sizes", systemImage: "pencil.and.ruler") }
                     NavigationLink { YarnWeightsView() } label: { Label("Yarn weights", systemImage: "scalemass") }
