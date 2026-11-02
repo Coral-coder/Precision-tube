@@ -1,4 +1,4 @@
-# PrecisionTube
+# PreciseTube
 
 An iPhone and iPad YouTube player for learning crochet and knitting from videos, plus a
 patterns and tools section.
@@ -49,5 +49,5 @@ App Store Connect secrets were copied in by its *Set up app repo* action:
 - tag `v1.1.0` on a `*u` commit to start a new version;
 - Actions → iOS TestFlight → Run workflow: always uploads.
 
-Bundle ID `com.coralcoder.precisiontube`; App Store Connect name `PrecisionTubeCrafts` (the
-scheme name); the home-screen name is *PrecisionTube*.
+Bundle ID `com.coralcoder.precisiontube`; scheme `PrecisionTubeCrafts` (the
+scheme name); the app is called *PreciseTube* in App Store Connect and on the home screen.
