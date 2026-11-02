@@ -24,6 +24,13 @@ YouTube tab and tap *Open in frame-by-frame player*. Recent videos and favorites
 becomes a row to tick off, with a row counter), a searchable stitch dictionary with US/UK names
 and a *Find a video of this* button, and short guides.
 
+**Shape Studio** (Patterns tab → cube button, or Tools): pick a shape (ball, egg, pear, bean,
+cylinder, cone) or import a 3D model (USDZ, OBJ, STL, PLY), set the size and your gauge, and it
+writes a single-crochet amigurumi pattern for it. The other way round, any pattern written round
+by round with stitch counts like `(18)` gets a *See it in 3D* button that builds the piece stitch
+by stitch. Models are measured by slicing them across the up axis, so one-piece rounded shapes
+work best; make limbs and ears separately.
+
 **Tools**: row/stitch counters, increase/decrease evenly calculator, gauge calculator, hook and
 needle sizes, yarn weights, US ↔ UK terms.
 

@@ -11,6 +11,13 @@ struct ToolsView: View {
                 } footer: {
                     Text("The first counter also appears under the video in the Player.")
                 }
+                Section {
+                    NavigationLink { ShapeStudioView() } label: {
+                        Label("Shape Studio: 3D shape ↔ pattern", systemImage: "cube.transparent")
+                    }
+                } footer: {
+                    Text("Turn a shape or a 3D model into an amigurumi pattern, or see a pattern in 3D.")
+                }
                 Section("Calculators") {
                     NavigationLink { IncreaseEvenlyView() } label: { Label("Increase / decrease evenly", systemImage: "arrow.up.and.down.text.horizontal") }
                     NavigationLink { GaugeView() } label: { Label("Gauge calculator", systemImage: "ruler") }

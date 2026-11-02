@@ -44,6 +44,7 @@ struct PatternsView: View {
             .navigationDestination(for: PatternContent.self) { PatternDetailView(pattern: $0) }
             .navigationDestination(for: Guide.self) { GuideView(guide: $0) }
             .toolbar {
+                NavigationLink { ShapeStudioView() } label: { Label("Shape Studio", systemImage: "cube.transparent") }
                 if section == .patterns {
                     Button { editing = UserPattern(title: "") } label: { Label("New pattern", systemImage: "plus") }
                 }
@@ -226,6 +227,13 @@ struct PatternDetailView: View {
                 if let videoID = p.videoID {
                     Button { app.open(videoID: videoID, store: store) } label: {
                         Label("Watch the video", systemImage: "play.rectangle.fill")
+                    }
+                }
+                if let counts = PatternToShape.roundCounts(from: p.sections.flatMap(\.rows)) {
+                    NavigationLink {
+                        PatternShapeView(title: p.title, counts: counts)
+                    } label: {
+                        Label("See it in 3D", systemImage: "cube.transparent")
                     }
                 }
                 if let query = p.videoSearch {
