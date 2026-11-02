@@ -12,6 +12,8 @@ struct PlayerScreen: View {
     @State private var focusMode = false
     @State private var renaming: VideoMarker?
     @State private var renameText = ""
+    @State private var overlayVisible = true
+    @State private var lastInteraction = Date()
 
     private var markers: [VideoMarker] {
         guard let id = player.videoID else { return [] }
@@ -19,23 +21,16 @@ struct PlayerScreen: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if player.videoID == nil {
-                    EmptyPlayerView()
-                } else {
-                    GeometryReader { geo in
-                        if geo.size.width > geo.size.height * 1.15 {
-                            HStack(spacing: 12) {
-                                VStack(spacing: 8) {
-                                    video
-                                    timelineBlock
-                                }
-                                ScrollView { controls.padding(.vertical, 4) }
-                                    .frame(width: min(380, geo.size.width * 0.4))
-                            }
-                            .padding(.horizontal, 8)
-                        } else {
+        GeometryReader { outer in
+            let landscape = player.videoID != nil && outer.size.width > outer.size.height
+            NavigationStack {
+                Group {
+                    if player.videoID == nil {
+                        EmptyPlayerView()
+                    } else if landscape {
+                        landscapePlayer
+                    } else {
+                        GeometryReader { geo in
                             VStack(spacing: 8) {
                                 video
                                     .frame(maxHeight: geo.size.height * 0.45)
@@ -45,25 +40,142 @@ struct PlayerScreen: View {
                         }
                     }
                 }
-            }
-            .navigationTitle(navTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { toolbar }
-            .toolbar(focusMode ? .hidden : .automatic, for: .tabBar)
-            .background(keyboardShortcuts)
-            .alert("Name this mark", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-                TextField("e.g. Start of row 3", text: $renameText)
-                Button("Save") {
-                    if let marker = renaming, let id = player.videoID {
-                        store.updateVideo(id) { video in
-                            if let i = video.markers.firstIndex(where: { $0.id == marker.id }) { video.markers[i].label = renameText }
+                .navigationTitle(navTitle)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { toolbar }
+                .toolbar(landscape ? .hidden : .automatic, for: .navigationBar)
+                .toolbar((focusMode || landscape) ? .hidden : .automatic, for: .tabBar)
+                .statusBarHidden(landscape)
+                .persistentSystemOverlays(landscape ? .hidden : .automatic)
+                .background(keyboardShortcuts)
+                .onChange(of: landscape) { _, _ in showOverlay() }
+                .onChange(of: player.currentTime) { _, _ in if !player.isPlaying { lastInteraction = Date() } }
+                .task(id: landscape) {
+                    // Fade the landscape controls out after a few seconds without a touch.
+                    while !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        if landscape, overlayVisible, Date().timeIntervalSince(lastInteraction) > 3.5 {
+                            withAnimation(.easeOut(duration: 0.35)) { overlayVisible = false }
                         }
                     }
-                    renaming = nil
                 }
-                Button("Cancel", role: .cancel) { renaming = nil }
+                .alert("Name this mark", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+                    TextField("e.g. Start of row 3", text: $renameText)
+                    Button("Save") {
+                        if let marker = renaming, let id = player.videoID {
+                            store.updateVideo(id) { video in
+                                if let i = video.markers.firstIndex(where: { $0.id == marker.id }) { video.markers[i].label = renameText }
+                            }
+                        }
+                        renaming = nil
+                    }
+                    Button("Cancel", role: .cancel) { renaming = nil }
+                }
             }
         }
+    }
+
+    private func showOverlay() {
+        lastInteraction = Date()
+        if !overlayVisible { withAnimation(.easeIn(duration: 0.2)) { overlayVisible = true } }
+    }
+
+    // MARK: Landscape: full-screen video, controls float over it and fade away
+
+    private var landscapePlayer: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            ZoomableVideo(interactive: interactWithYouTube, onTap: {
+                if overlayVisible {
+                    withAnimation(.easeOut(duration: 0.25)) { overlayVisible = false }
+                } else {
+                    showOverlay()
+                }
+            })
+            .aspectRatio(16 / 9, contentMode: .fit)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea()
+            errorOverlay
+            if overlayVisible {
+                landscapeControls
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    private var landscapeControls: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                Text(navTitle).font(.headline).lineLimit(1)
+                Spacer()
+                markButton
+                optionsMenu.font(.title3)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(LinearGradient(colors: [.black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom))
+
+            Spacer(minLength: 0)
+
+            VStack(spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(TimeFormat.precise(player.currentTime))
+                        .font(.system(.headline, design: .monospaced))
+                    Text("frame \(player.currentFrame)")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Menu {
+                        ForEach([0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2], id: \.self) { r in
+                            Button(r == 1 ? "1×" : "\(r.formatted())×") { player.setRate(r) }
+                        }
+                    } label: {
+                        Label(player.rate == 1 ? "1×" : "\(player.rate.formatted())×", systemImage: "speedometer")
+                            .font(.subheadline)
+                    }
+                    Button { span = max(PrecisionTimeline.minSpan, span / 2) } label: { Image(systemName: "plus.magnifyingglass") }
+                    Button { span = min(max(10, player.duration), span * 2) } label: { Image(systemName: "minus.magnifyingglass") }
+                    Toggle(isOn: $player.loopOn) { Image(systemName: "repeat") }
+                        .toggleStyle(.button)
+                        .disabled(player.loopA == nil || player.loopB == nil)
+                }
+                PrecisionTimeline(span: $span, markers: markers)
+                    .frame(height: 64)
+                HStack(spacing: 8) {
+                    RepeatButton(action: { player.jump(seconds: -1) }, translucent: true) { Label("1s", systemImage: "chevron.backward.2") }
+                    RepeatButton(action: { player.step(frames: -stepSize) }, translucent: true) {
+                        Image(systemName: "backward.frame.fill").font(.title2)
+                    }
+                    Button { player.togglePlay() } label: {
+                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.title)
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    RepeatButton(action: { player.step(frames: stepSize) }, translucent: true) {
+                        Image(systemName: "forward.frame.fill").font(.title2)
+                    }
+                    RepeatButton(action: { player.jump(seconds: 1) }, translucent: true) { Label("1s", systemImage: "chevron.forward.2") }
+                }
+                .font(.subheadline)
+            }
+            .padding(12)
+            .background(.ultraThinMaterial.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
+        }
+        .environment(\.colorScheme, .dark)
+        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in lastInteraction = Date() })
+    }
+
+    private var markButton: some View {
+        Button {
+            guard let id = player.videoID else { return }
+            let t = player.currentTime
+            store.updateVideo(id) { video in
+                video.markers.append(VideoMarker(time: t, label: "Mark \(video.markers.count + 1)"))
+            }
+        } label: { Image(systemName: "bookmark.fill") }
     }
 
     private var navTitle: String {
@@ -78,7 +190,11 @@ struct PlayerScreen: View {
             .aspectRatio(16 / 9, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .background(Color.black)
-            .overlay(alignment: .center) {
+            .overlay(alignment: .center) { errorOverlay }
+    }
+
+    @ViewBuilder
+    private var errorOverlay: some View {
                 if let error = player.errorMessage {
                     VStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle").font(.largeTitle)
@@ -92,7 +208,6 @@ struct PlayerScreen: View {
                     .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 12))
                     .padding()
                 }
-            }
     }
 
     // MARK: Timeline
@@ -302,6 +417,12 @@ struct PlayerScreen: View {
                 Button { focusMode.toggle() } label: {
                     Image(systemName: focusMode ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
                 }
+                optionsMenu
+            }
+        }
+    }
+
+    private var optionsMenu: some View {
                 Menu {
                     Picker("Frame rate", selection: $player.fpsOverride) {
                         Text("Auto (\(player.detectedFPS?.formatted() ?? "30"))").tag(Double?.none)
@@ -323,8 +444,6 @@ struct PlayerScreen: View {
                         }
                     }
                 } label: { Image(systemName: "ellipsis.circle") }
-            }
-        }
     }
 
     private var keyboardShortcuts: some View {
@@ -348,6 +467,8 @@ struct PlayerScreen: View {
 struct ZoomableVideo: View {
     @EnvironmentObject var player: PlayerController
     var interactive: Bool
+    /// What a single tap does; plays/pauses by default.
+    var onTap: (() -> Void)? = nil
 
     @State private var scale: CGFloat = 1
     @State private var baseScale: CGFloat = 1
@@ -381,7 +502,7 @@ struct ZoomableVideo: View {
                             )
                         )
                         .onTapGesture(count: 2) { reset() }
-                        .onTapGesture { player.togglePlay() }
+                        .onTapGesture { if let onTap { onTap() } else { player.togglePlay() } }
                 }
                 if scale > 1.01 {
                     Button { reset() } label: {
@@ -422,6 +543,7 @@ struct VideoSurface: UIViewRepresentable {
 
 struct RepeatButton<Content: View>: View {
     let action: @MainActor () -> Void
+    var translucent = false
     @ViewBuilder let label: () -> Content
 
     @State private var pressed = false
@@ -432,7 +554,7 @@ struct RepeatButton<Content: View>: View {
             .frame(maxWidth: .infinity, minHeight: 56)
             .foregroundStyle(Color.accentColor)
             .background(RoundedRectangle(cornerRadius: 12)
-                .fill(pressed ? Color.accentColor.opacity(0.3) : Color(.secondarySystemBackground)))
+                .fill(pressed ? Color.accentColor.opacity(0.3) : Color(.secondarySystemBackground).opacity(translucent ? 0.55 : 1)))
             .contentShape(RoundedRectangle(cornerRadius: 12))
             .gesture(
                 DragGesture(minimumDistance: 0)

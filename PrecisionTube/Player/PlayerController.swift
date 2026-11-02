@@ -24,7 +24,7 @@ final class PlayerController: NSObject, ObservableObject {
     @Published private(set) var preciseMode = false
     @Published private(set) var ready = false
     @Published private(set) var errorMessage: String?
-    @Published var muted = false { didSet { js("ptMute(\(muted))") } }
+    @Published var muted = false { didSet { js("ptMute(\(muted))"); frameJS("__pt.mute(\(muted))") } }
 
     @Published var loopA: Double?
     @Published var loopB: Double?
@@ -43,6 +43,11 @@ final class PlayerController: NSObject, ObservableObject {
     private var lastSaved = Date.distantPast
     /// YouTube's embed frame, once the injected script there has found the video.
     private var videoFrame: WKFrameInfo?
+    /// Fallback: the embed page loaded directly (not in an iframe), so the script surely runs in it.
+    private var directMode = false
+    private var triedDirect = false
+    private var loadedStart: Double = 0
+    private var fallbackTask: Task<Void, Never>?
 
     /// The page's origin. YouTube asks embedding apps to send their bundle ID as the referrer.
     static let origin: String = {
@@ -85,17 +90,60 @@ final class PlayerController: NSObject, ObservableObject {
         detectedFPS = nil
         self.fpsOverride = fpsOverride
         loopA = nil; loopB = nil; loopOn = false
+        directMode = false
+        triedDirect = false
+        loadedStart = max(0, start)
+        loadInFrame()
+    }
+
+    private func loadInFrame() {
+        guard let videoID else { return }
+        fallbackTask?.cancel()
+        directMode = false
+        videoFrame = nil
+        preciseMode = false
         let html = Self.html
             .replacingOccurrences(of: "__VIDEO_ID__", with: videoID)
-            .replacingOccurrences(of: "__START__", with: String(format: "%.3f", max(0, start)))
+            .replacingOccurrences(of: "__START__", with: String(format: "%.3f", currentTime))
             .replacingOccurrences(of: "__ORIGIN__", with: Self.origin)
         webView.loadHTMLString(html, baseURL: URL(string: Self.origin + "/"))
+        // If the script inside YouTube's frame never reports in, load the embed page directly.
+        fallbackTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard let self, !Task.isCancelled, self.videoFrame == nil, self.ready,
+                  self.errorMessage == nil, !self.triedDirect else { return }
+            self.loadDirect()
+        }
+    }
+
+    private func loadDirect() {
+        guard let videoID else { return }
+        triedDirect = true
+        directMode = true
+        videoFrame = nil
+        var comps = URLComponents(string: "https://www.youtube.com/embed/\(videoID)")!
+        comps.queryItems = [
+            URLQueryItem(name: "playsinline", value: "1"), URLQueryItem(name: "controls", value: "0"),
+            URLQueryItem(name: "rel", value: "0"), URLQueryItem(name: "iv_load_policy", value: "3"),
+            URLQueryItem(name: "fs", value: "0"), URLQueryItem(name: "disablekb", value: "1"),
+            URLQueryItem(name: "start", value: String(Int(currentTime))),
+            URLQueryItem(name: "origin", value: Self.origin), URLQueryItem(name: "widget_referrer", value: Self.origin),
+        ]
+        var request = URLRequest(url: comps.url!)
+        request.setValue(Self.origin + "/", forHTTPHeaderField: "Referer")
+        webView.load(request)
+        // Still nothing? Go back to the iframe player, which at least plays.
+        fallbackTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard let self, !Task.isCancelled, self.directMode, self.videoFrame == nil else { return }
+            self.loadInFrame()
+        }
     }
 
     func togglePlay() { isPlaying ? pause() : play() }
 
     func play() {
-        js("ptPlay()")
+        if directMode { frameJS("__pt.play()") } else { js("ptPlay()") }
         isPlaying = true
     }
 
@@ -132,7 +180,8 @@ final class PlayerController: NSObject, ObservableObject {
     }
 
     func setZoom(scale: CGFloat, offset: CGSize) {
-        js("ptZoom(\(scale), \(offset.width), \(offset.height))")
+        if directMode { frameJS("__pt.zoom(\(scale), \(offset.width), \(offset.height))") }
+        else { js("ptZoom(\(scale), \(offset.width), \(offset.height))") }
     }
 
     func savePosition(force: Bool = false) {
@@ -164,9 +213,16 @@ final class PlayerController: NSObject, ObservableObject {
         let fromVideoFrame = (msg["src"] as? String) == "frame"
         switch type {
         case "frame-ready":
+            fallbackTask?.cancel()
             videoFrame = frame
             preciseMode = true
             frameJS("__pt.rate(\(desiredRate))")
+            if directMode {
+                // No IFrame API here: show the first frame, then wait paused.
+                ready = true
+                let start = currentTime
+                frameJS("__pt.mute(\(muted)); __pt.play(); setTimeout(function(){ __pt.pause(); __pt.seek(\(start)); }, 500)")
+            }
         case "time":
             let d = (msg["d"] as? Double) ?? 0
             if d.isFinite, d > 0, !fromVideoFrame || duration == 0 { duration = d }
@@ -238,11 +294,30 @@ final class PlayerController: NSObject, ObservableObject {
       try{ (document.head||document.documentElement).appendChild(css); }catch(e){}
       try{ var sheet=new CSSStyleSheet(); sheet.replaceSync(rule); document.adoptedStyleSheets=document.adoptedStyleSheets.concat([sheet]); }catch(e){}
       var hideSelectors=rule.slice(0, rule.indexOf('{'));
+      var keepSelector='.ytp-spinner,.ytp-error,.ytp-error-content,script,style,link';
       function hideOverlays(){
         try{ document.querySelectorAll(hideSelectors).forEach(function(el){ el.style.setProperty('display','none','important'); }); }catch(e){}
+        // Whatever YouTube calls its overlays: keep only the chain of elements that holds the
+        // video (plus the spinner and error messages) and hide every sibling along it.
+        try{
+          var v=document.querySelector('video'); if (!v) return;
+          var n=v;
+          while (n && n.parentElement && n!==document.body && n!==document.documentElement){
+            var p=n.parentElement;
+            for (var c=p.firstElementChild; c; c=c.nextElementSibling){
+              if (c===n || c.tagName==='VIDEO') continue;
+              if (c.matches(keepSelector) || c.querySelector('.ytp-error:not([style*="display: none"]), video')) continue;
+              if (c.style.getPropertyValue('display')!=='none') c.style.setProperty('display','none','important');
+            }
+            n=p;
+          }
+        }catch(e){}
       }
       hideOverlays();
-      setInterval(hideOverlays, 250);
+      setInterval(hideOverlays, 150);
+      document.addEventListener('pause', hideOverlays, true);
+      document.addEventListener('seeking', hideOverlays, true);
+      document.addEventListener('seeked', hideOverlays, true);
       var vid=null, desiredRate=1, frameStart=null, pendingSeek=null, lastKey='', announced=false;
       function post(m){ m.src='frame'; try{ window.webkit.messageHandlers.pt.postMessage(m); }catch(e){} }
       function hook(v){
@@ -304,6 +379,9 @@ final class PlayerController: NSObject, ObservableObject {
         },
         rate: function(r){ desiredRate=r; var v=grab(); if (v) v.playbackRate=r; },
         pause: function(){ var v=grab(); if (v) v.pause(); },
+        mute: function(m){ var v=grab(); if (v) v.muted=!!m; },
+        zoom: function(s,x,y){ var v=grab(); var t=v ? (v.closest('.html5-video-player') || document.body) : document.body;
+          t.style.transformOrigin='50% 50%'; t.style.transform='translate('+x+'px,'+y+'px) scale('+s+')'; },
         play: function(){ var v=grab(); if (v) v.play(); }
       };
       setInterval(function(){ grab(); report(false); }, 66);
