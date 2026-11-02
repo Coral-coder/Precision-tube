@@ -229,9 +229,10 @@ struct PatternDetailView: View {
                         Label("Watch the video", systemImage: "play.rectangle.fill")
                     }
                 }
-                if let counts = PatternToShape.roundCounts(from: p.sections.flatMap(\.rows)) {
+                let pieces = PatternToShape.pieces(from: p.sections.flatMap(\.rows))
+                if !pieces.isEmpty {
                     NavigationLink {
-                        PatternShapeView(title: p.title, counts: counts)
+                        PatternShapeView(title: p.title, pieces: pieces)
                     } label: {
                         Label("See it in 3D", systemImage: "cube.transparent")
                     }
