@@ -228,9 +228,21 @@ final class PlayerController: NSObject, ObservableObject {
         '.ytp-cued-thumbnail-overlay','.ytp-bezel','.ytp-bezel-text-wrapper','.ytp-tooltip','.ytp-contextmenu',
         '.ytp-overflow-button','.ytp-share-button','.ytp-watch-later-button','.ytp-copylink-button',
         '.branding-img','.iv-branding','.annotation','.ytp-suggested-action','.ytp-featured-product',
-        '.ytp-chapter-container','.ytp-player-content.ytp-iv-player-content']
-        .join(',')+'{display:none !important;}';
-      (document.head||document.documentElement).appendChild(css);
+        '.ytp-chapter-container','.ytp-player-content.ytp-iv-player-content',
+        '.html5-video-player > *:not(.html5-video-container):not(.ytp-spinner):not(.ytp-error):not(.ytp-error-content)']
+        .join(',');
+      var rule=css.textContent+'{display:none !important;}';
+      css.textContent=rule;
+      // YouTube's page security policy can block an added <style>; a constructed stylesheet
+      // and inline styles set from script aren't affected, so use all three.
+      try{ (document.head||document.documentElement).appendChild(css); }catch(e){}
+      try{ var sheet=new CSSStyleSheet(); sheet.replaceSync(rule); document.adoptedStyleSheets=document.adoptedStyleSheets.concat([sheet]); }catch(e){}
+      var hideSelectors=rule.slice(0, rule.indexOf('{'));
+      function hideOverlays(){
+        try{ document.querySelectorAll(hideSelectors).forEach(function(el){ el.style.setProperty('display','none','important'); }); }catch(e){}
+      }
+      hideOverlays();
+      setInterval(hideOverlays, 250);
       var vid=null, desiredRate=1, frameStart=null, pendingSeek=null, lastKey='', announced=false;
       function post(m){ m.src='frame'; try{ window.webkit.messageHandlers.pt.postMessage(m); }catch(e){} }
       function hook(v){
