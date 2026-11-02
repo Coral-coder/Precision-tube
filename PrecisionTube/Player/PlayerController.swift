@@ -218,6 +218,19 @@ final class PlayerController: NSObject, ObservableObject {
     (function(){
       if (!/(^|\.)youtube(-nocookie)?\.com$/.test(location.hostname) || location.pathname.indexOf('/embed/') !== 0) return;
       if (window.__pt) return;
+      // Hide YouTube's own overlays (big play button, title bar, "More videos", logo, cards);
+      // the app has its own controls. Errors and the loading spinner stay visible.
+      var css=document.createElement('style');
+      css.textContent=['.ytp-large-play-button','.ytp-chrome-top','.ytp-chrome-bottom','.ytp-gradient-top',
+        '.ytp-gradient-bottom','.ytp-title','.ytp-show-cards-title','.ytp-pause-overlay','.ytp-pause-overlay-container',
+        '.ytp-watermark','.ytp-youtube-button','.ytp-impression-link','.ytp-ce-element','.ytp-cards-teaser',
+        '.ytp-cards-button','.ytp-paid-content-overlay','.ytp-endscreen-content','.ytp-videowall-still',
+        '.ytp-cued-thumbnail-overlay','.ytp-bezel','.ytp-bezel-text-wrapper','.ytp-tooltip','.ytp-contextmenu',
+        '.ytp-overflow-button','.ytp-share-button','.ytp-watch-later-button','.ytp-copylink-button',
+        '.branding-img','.iv-branding','.annotation','.ytp-suggested-action','.ytp-featured-product',
+        '.ytp-chapter-container','.ytp-player-content.ytp-iv-player-content']
+        .join(',')+'{display:none !important;}';
+      (document.head||document.documentElement).appendChild(css);
       var vid=null, desiredRate=1, frameStart=null, pendingSeek=null, lastKey='', announced=false;
       function post(m){ m.src='frame'; try{ window.webkit.messageHandlers.pt.postMessage(m); }catch(e){} }
       function hook(v){
