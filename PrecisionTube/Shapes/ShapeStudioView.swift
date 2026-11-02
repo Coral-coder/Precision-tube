@@ -29,6 +29,7 @@ struct ShapeStudioView: View {
 
     // Pattern
     @State private var patternID: String?
+    @State private var pieceID = 0
 
     @State private var saved = false
 
@@ -39,10 +40,21 @@ struct ShapeStudioView: View {
         var title: String
     }
 
-    private var parseablePatterns: [PatternContent] {
-        (store.patterns.map(\.content) + PatternLibrary.all).filter {
-            PatternToShape.roundCounts(from: $0.sections.flatMap(\.rows)) != nil
+    /// All of your patterns, plus the built-in ones that are written round by round.
+    private var availablePatterns: [PatternContent] {
+        store.patterns.map(\.content) + PatternLibrary.all.filter {
+            !PatternToShape.pieces(from: $0.sections.flatMap(\.rows)).isEmpty
         }
+    }
+
+    private var selectedPattern: PatternContent? {
+        let all = availablePatterns
+        return all.first { $0.id == patternID } ?? all.first
+    }
+
+    private var selectedPieces: [PatternToShape.Piece] {
+        guard let p = selectedPattern else { return [] }
+        return PatternToShape.pieces(from: p.sections.flatMap(\.rows))
     }
 
     private var result: StudioResult? {
@@ -59,10 +71,11 @@ struct ShapeStudioView: View {
             return StudioResult(counts: counts, rows: ShapeToPattern.pattern(for: counts).rows, ghost: profile,
                           title: "\((fileName ?? "Model") as String) \(format(fileHeight)) cm")
         case .pattern:
-            guard let id = patternID ?? parseablePatterns.first?.id,
-                  let pattern = parseablePatterns.first(where: { $0.id == id }),
-                  let counts = PatternToShape.roundCounts(from: pattern.sections.flatMap(\.rows)) else { return nil }
-            return StudioResult(counts: counts, rows: [], ghost: nil, title: pattern.title)
+            let pieces = selectedPieces
+            guard let pattern = selectedPattern,
+                  let piece = pieces.first(where: { $0.id == pieceID }) ?? pieces.first else { return nil }
+            return StudioResult(counts: piece.counts, rows: [], ghost: nil,
+                                title: pieces.count > 1 ? "\(pattern.title): \(piece.name)" : pattern.title)
         }
     }
 
@@ -129,7 +142,9 @@ struct ShapeStudioView: View {
         switch source {
         case .shape: return "Pick a shape."
         case .file: return loadingFile ? "Measuring the model…" : "Import a 3D model (USDZ, OBJ, STL or PLY) and it becomes a pattern."
-        case .pattern: return "None of your patterns are written round by round with stitch counts like (18). Add one in Patterns, or try the Amigurumi Ball."
+        case .pattern:
+            if availablePatterns.isEmpty { return "Save a pattern in the Patterns tab, or try the Amigurumi Ball." }
+            return "This pattern isn't written round by round with stitch counts, so it can't be shown in 3D."
         }
     }
 
@@ -246,12 +261,30 @@ struct ShapeStudioView: View {
 
     @ViewBuilder
     private var patternControls: some View {
-        if parseablePatterns.isEmpty {
-            Text("No round-by-round patterns yet.").foregroundStyle(.secondary)
+        if availablePatterns.isEmpty {
+            Text("No patterns yet. Save one in the Patterns tab.").foregroundStyle(.secondary)
         } else {
-            Picker("Pattern", selection: Binding(get: { patternID ?? parseablePatterns.first?.id ?? "" },
-                                                 set: { patternID = $0 })) {
-                ForEach(parseablePatterns) { Text($0.title).tag($0.id) }
+            Picker("Pattern", selection: Binding(get: { selectedPattern?.id ?? "" },
+                                                 set: { patternID = $0; pieceID = 0 })) {
+                ForEach(availablePatterns) { p in
+                    Text(p.title.isEmpty ? "Untitled" : p.title).tag(p.id)
+                }
+            }
+            let pieces = selectedPieces
+            if pieces.count > 1 {
+                Picker("Piece", selection: $pieceID) {
+                    ForEach(pieces) { Text("\($0.name) (\($0.counts.count) rounds)").tag($0.id) }
+                }
+            } else if pieces.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("This pattern can't be shown in 3D yet.").font(.callout.weight(.semibold))
+                    Text("It needs rounds with their stitch counts, one per line, for example:")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("R1: 6 sc in a magic ring (6)\nR2: inc x6 (12)\nR3: (sc, inc) x6 (18)")
+                        .font(.caption.monospaced())
+                    Text("Flat patterns worked in rows (scarves, granny squares) aren't supported yet.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -318,16 +351,23 @@ struct ShapeStudioView: View {
 /// The 3D preview for one pattern (from the pattern's page).
 struct PatternShapeView: View {
     let title: String
-    let counts: [Int]
+    let pieces: [PatternToShape.Piece]
+    @State private var pieceID = 0
     @State private var gauge = Gauge()
     @State private var yarn = Color(red: 0.93, green: 0.55, blue: 0.68)
 
     var body: some View {
-        let model = StitchModel.from(counts: counts, gauge: gauge)
+        let piece = pieces.first { $0.id == pieceID } ?? pieces[0]
+        let model = StitchModel.from(counts: piece.counts, gauge: gauge)
         VStack(spacing: 0) {
             ShapeSceneView(model: model, ghost: nil, yarn: UIColor(yarn))
             Form {
-                LabeledContent("Rounds", value: "\(counts.count)")
+                if pieces.count > 1 {
+                    Picker("Piece", selection: $pieceID) {
+                        ForEach(pieces) { Text($0.name).tag($0.id) }
+                    }
+                }
+                LabeledContent("Rounds", value: "\(piece.counts.count)")
                 LabeledContent("Finished size", value: "about \(String(format: "%.1f", model.maxRadius * 2)) × \(String(format: "%.1f", model.height)) cm")
                 Stepper(value: $gauge.stitchesPer10cm, in: 8...40) {
                     LabeledContent("Stitches per 10 cm", value: "\(Int(gauge.stitchesPer10cm))")
@@ -337,7 +377,7 @@ struct PatternShapeView: View {
                 }
                 ColorPicker("Yarn color", selection: $yarn, supportsOpacity: false)
             }
-            .frame(maxHeight: 300)
+            .frame(maxHeight: 320)
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)

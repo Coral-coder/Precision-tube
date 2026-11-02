@@ -164,39 +164,107 @@ enum ShapeToPattern {
 // MARK: - Pattern → shape
 
 enum PatternToShape {
+    /// One crocheted piece in a pattern (a head, a body…), with each round's stitch count.
+    struct Piece: Identifiable, Equatable {
+        var id: Int
+        var name: String
+        var counts: [Int]
+    }
+
     private static func regex(_ p: String) -> NSRegularExpression {
         try! NSRegularExpression(pattern: p, options: [.caseInsensitive])
     }
-    private static let label = regex(#"^\s*(?:rnds?|rounds?|rows?|r)\s*(\d+)(?:\s*(?:[-–—]|to)\s*(?:r|rnd|round|row)?\s*(\d+))?\b"#)
-    private static let trailingCount = regex(#"[\(\[]\s*(\d+)\s*(?:sts?|stitches|sc)?\s*[\)\]]\s*\.?\s*$"#)
-    private static let ring = regex(#"(\d+)\s*sc\s*(?:in|into)\s*(?:a|the)?\s*(?:magic|mr|ring|adjustable)"#)
-    private static let repeatGroup = regex(#"[\*\(]\s*(?:sc\s*(\d+)\s*,\s*)?(inc|dec)\s*[\*\)]\s*(?:x\s*)?(\d+)"#)
-    private static let countedShaping = regex(#"\b(inc|dec)\s*(?:x\s*)?(\d+)\b|\b(\d+)\s*(inc|dec)\b"#)
+    private static let roundWord = #"(?:rnds?|rounds?|rows?|rds?|r)"#
+    /// "R1", "Rnd 6-10", "Round 3 to 5"
+    private static let label = regex(#"^\s*"# + roundWord + #"\s*\.?\s*(\d+)(?:\s*(?:[-–—~]|to|thru|through)\s*"# + roundWord + #"?\s*\.?\s*(\d+))?(?![a-z])"#)
+    /// "1.", "5-10:", "3)"
+    private static let numbered = regex(#"^\s*(\d+)(?:\s*[-–—~]\s*(\d+))?\s*[\.\):]"#)
+    /// Several rounds pasted on one line: split before each "R2:" / "Rnd 3." inside it.
+    private static let inlineSplit = regex(#"(?<=[\.\)\]\}\s])(?=(?:rnds?|rounds?|r)\s?\d+(?:\s*[-–—]\s*\d+)?\s*[:\.\)\(])"#)
+    private static let afterLabel = regex(#"^\s*[\(\[\{]\s*(\d+)\s*(?:sts?|stitches|sc)?\s*[\)\]\}]"#)
+    private static let bracketCount = regex(#"[\(\[\{]\s*(\d+)\s*(?:sts?\.?|stitches|sc)?\s*(?:total|in total)?\s*[\)\]\}]"#)
+    private static let dashCount = regex(#"(?:[-–—=:]|=>|→)\s*(\d+)\s*(?:sts?|stitches|sc)?\s*\.?\s*$"#)
+    private static let stsCount = regex(#"(\d+)\s*(?:sts|stitches)\s*\.?\s*$"#)
+    private static let ring = regex(#"(\d+)\s*(?:sc|dc|x)\s*(?:in|into)?\s*(?:a|the|an)?\s*(?:magic|mr|mc|ring|adjustable)"#)
+    private static let ringAfter = regex(#"(?:magic ring|magic circle|mr|mc)\D{0,12}?(\d+)"#)
+    private static let repeatGroup = regex(#"[\*\(\[]\s*(?:(?:sc|dc)\s*(\d+)|(\d+)\s*(?:sc|dc))?\s*,?\s*(inc|dec|sc2tog|invdec)\s*[\*\)\]]\s*(?:x|times|\*)?\s*(\d+)"#)
+    private static let countedShaping = regex(#"\b(inc|dec|sc2tog|invdec)\s*(?:x\s*)?(\d+)\b|\b(\d+)\s*(inc|dec|sc2tog|invdec)\b"#)
 
-    /// Stitch count of every round, if the rows look like a round-by-round (amigurumi) pattern.
-    static func roundCounts(from rows: [String]) -> [Int]? {
-        var counts: [Int] = []
-        for line in rows {
+    /// The stitch counts of the first round-by-round piece, if there is one.
+    static func roundCounts(from rows: [String]) -> [Int]? { pieces(from: rows).first?.counts }
+
+    /// Every round-by-round piece in the pattern. Round numbers starting over (R1 again)
+    /// begin a new piece, named after the short heading line above it ("HEAD", "Body:").
+    static func pieces(from rows: [String]) -> [Piece] {
+        var out: [Piece] = []
+        var current: [Int] = []
+        var name: String?
+        var lastNumber = 0
+        var lastHeading: String?
+
+        func close() {
+            guard current.count >= 3, let first = current.first, first <= 24 else { return }
+            var title = name ?? "Piece \(out.count + 1)"
+            if out.contains(where: { $0.name == title }) { title += " \(out.count + 1)" }
+            out.append(Piece(id: out.count, name: title, counts: current))
+        }
+
+        for line in split(rows) {
             let ns = line as NSString
             let range = NSRange(location: 0, length: ns.length)
-            guard let m = label.firstMatch(in: line, range: range) else { continue }
+            guard let m = label.firstMatch(in: line, range: range) ?? numbered.firstMatch(in: line, range: range) else {
+                let heading = line.trimmingCharacters(in: CharacterSet(charactersIn: " :-*#\t"))
+                if !heading.isEmpty, heading.count < 40 { lastHeading = heading }
+                continue
+            }
             let a = Int(ns.substring(with: m.range(at: 1))) ?? 0
             let b = m.range(at: 2).location != NSNotFound ? (Int(ns.substring(with: m.range(at: 2))) ?? a) : a
-            let times = max(1, min(200, b - a + 1))
-            guard let c = count(of: line, prev: counts.last), c > 0, c < 2000 else { continue }
-            counts.append(contentsOf: Array(repeating: c, count: times))
+            if !current.isEmpty, a <= lastNumber {
+                close()
+                current = []
+            }
+            if current.isEmpty { name = lastHeading }
+            let rest = ns.substring(from: m.range.location + m.range.length)
+            guard let c = count(rest: rest, line: line, prev: current.last), c > 0, c < 2000 else { continue }
+            current.append(contentsOf: Array(repeating: c, count: max(1, min(200, b - a + 1))))
+            lastNumber = max(a, b)
         }
-        guard counts.count >= 3, let first = counts.first, first <= 12 else { return nil }
-        return counts
+        close()
+        return out
     }
 
-    private static func count(of line: String, prev: Int?) -> Int? {
+    private static func split(_ rows: [String]) -> [String] {
+        var out: [String] = []
+        for row in rows {
+            let ns = row as NSString
+            var start = 0
+            for m in inlineSplit.matches(in: row, range: NSRange(location: 0, length: ns.length)) {
+                let piece = ns.substring(with: NSRange(location: start, length: m.range.location - start))
+                out.append(piece)
+                start = m.range.location
+            }
+            out.append(ns.substring(from: start))
+        }
+        return out.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    private static func group(_ m: NSTextCheckingResult, _ i: Int, in ns: NSString) -> String? {
+        let r = m.range(at: i)
+        return r.location == NSNotFound ? nil : ns.substring(with: r)
+    }
+
+    private static func count(rest: String, line: String, prev: Int?) -> Int? {
         let ns = line as NSString
         let range = NSRange(location: 0, length: ns.length)
-        if let m = trailingCount.firstMatch(in: line, range: range) {
+        let restNS = rest as NSString
+        if let m = afterLabel.firstMatch(in: rest, range: NSRange(location: 0, length: restNS.length)) {
+            return Int(restNS.substring(with: m.range(at: 1)))
+        }
+        if let m = bracketCount.matches(in: line, range: range).last { return Int(ns.substring(with: m.range(at: 1))) }
+        if let m = dashCount.firstMatch(in: line, range: range) ?? stsCount.firstMatch(in: line, range: range) {
             return Int(ns.substring(with: m.range(at: 1)))
         }
-        if let m = ring.firstMatch(in: line, range: range) {
+        if let m = ring.firstMatch(in: line, range: range) ?? (prev == nil ? ringAfter.firstMatch(in: line, range: range) : nil) {
             return Int(ns.substring(with: m.range(at: 1)))
         }
         guard let prev else { return nil }
@@ -205,20 +273,20 @@ enum PatternToShape {
         if !groups.isEmpty {
             var c = prev
             for g in groups {
-                let n = Int(ns.substring(with: g.range(at: 3))) ?? 0
-                c += ns.substring(with: g.range(at: 2)).lowercased() == "inc" ? n : -n
+                let n = Int(group(g, 4, in: ns) ?? "0") ?? 0
+                c += (group(g, 3, in: ns) ?? "").lowercased() == "inc" ? n : -n
             }
             return c
         }
         let everywhere = lower.contains("every") || lower.contains("each") || lower.contains("around") || lower.contains("all ")
         if lower.contains("inc"), everywhere { return prev * 2 }
-        if lower.contains("dec"), everywhere { return max(1, prev / 2) }
+        if lower.contains("dec") || lower.contains("sc2tog"), everywhere { return max(1, prev / 2) }
         if let m = countedShaping.firstMatch(in: line, range: range) {
-            let word = (m.range(at: 1).location != NSNotFound ? ns.substring(with: m.range(at: 1)) : ns.substring(with: m.range(at: 4))).lowercased()
-            let num = Int(m.range(at: 2).location != NSNotFound ? ns.substring(with: m.range(at: 2)) : ns.substring(with: m.range(at: 3))) ?? 0
-            return word == "inc" ? prev + num : prev - num
+            let word = (group(m, 1, in: ns) ?? group(m, 4, in: ns) ?? "").lowercased()
+            let n = Int(group(m, 2, in: ns) ?? group(m, 3, in: ns) ?? "0") ?? 0
+            return word == "inc" ? prev + n : prev - n
         }
-        if lower.contains("sc"), everywhere { return prev }
+        if lower.contains("sc") || lower.contains("dc"), everywhere { return prev }
         return nil
     }
 }
