@@ -16,6 +16,8 @@ struct SavedVideo: Codable, Identifiable, Hashable {
     var favorite = false
     var markers: [VideoMarker] = []
     var fpsOverride: Double?
+    var playlistID: String?
+    var playlistIndex: Int?
 
     var thumbnailURL: URL? { URL(string: "https://i.ytimg.com/vi/\(id)/mqdefault.jpg") }
     var displayTitle: String { title ?? "YouTube video \(id)" }

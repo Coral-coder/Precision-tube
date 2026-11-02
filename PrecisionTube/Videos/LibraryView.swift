@@ -86,9 +86,10 @@ struct LibraryView: View {
     private func openTyped() {
         guard let id = YouTube.videoID(from: linkText) else { return }
         let start = YouTube.startTime(from: linkText)
+        let playlist = YouTube.playlistID(from: linkText), index = YouTube.playlistIndex(from: linkText)
         linkText = ""
         linkFocused = false
-        app.open(videoID: id, store: store, start: start)
+        app.open(videoID: id, store: store, start: start, playlist: playlist, index: index)
     }
 }
 

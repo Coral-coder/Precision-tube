@@ -35,9 +35,17 @@ final class AppState: ObservableObject {
     @Published var browseRequest: URL?
     let player = PlayerController()
 
-    func open(videoID: String, store: Store, start: Double? = nil) {
-        let video = store.touchVideo(id: videoID)
-        player.load(videoID: videoID, start: start ?? video.lastPosition, fpsOverride: video.fpsOverride)
+    /// Opens a video. With a playlist, the player keeps going through the playlist; a video
+    /// opened from the library continues the playlist it was last played in.
+    func open(videoID: String, store: Store, start: Double? = nil, playlist: String? = nil, index: Int? = nil) {
+        var video = store.touchVideo(id: videoID)
+        if let playlist {
+            store.updateVideo(videoID) { $0.playlistID = playlist; $0.playlistIndex = index }
+            video.playlistID = playlist
+            video.playlistIndex = index
+        }
+        player.load(videoID: videoID, start: start ?? video.lastPosition, fpsOverride: video.fpsOverride,
+                    playlist: video.playlistID, index: video.playlistIndex)
         tab = .player
         if video.title == nil {
             Task { await store.fetchTitle(for: videoID) }
@@ -82,6 +90,12 @@ struct RootView: View {
             }
             app.player.onSaveFPS = { id, fps in
                 store.updateVideo(id) { $0.fpsOverride = fps }
+            }
+            app.player.onVideoChanged = { id, playlist, index in
+                let video = store.touchVideo(id: id)
+                store.updateVideo(id) { $0.playlistID = playlist; $0.playlistIndex = index }
+                if video.title == nil { Task { await store.fetchTitle(for: id) } }
+                return video.fpsOverride
             }
         }
         .onChange(of: scenePhase) { _, phase in

@@ -16,9 +16,11 @@ struct BrowseView: View {
                     if let id = browser.currentVideoID {
                         Button {
                             browser.pauseVideos()
-                            app.open(videoID: id, store: store, start: browser.currentStart)
+                            app.open(videoID: id, store: store, start: browser.currentStart,
+                                     playlist: browser.currentPlaylist, index: browser.currentIndex)
                         } label: {
-                            Label("Open in frame-by-frame player", systemImage: "scope")
+                            Label(browser.currentPlaylist == nil ? "Open in frame-by-frame player" : "Play the playlist frame by frame",
+                                  systemImage: browser.currentPlaylist == nil ? "scope" : "list.and.film")
                                 .font(.headline)
                                 .padding(.horizontal, 20).padding(.vertical, 14)
                         }
@@ -64,6 +66,8 @@ final class BrowserModel: NSObject, ObservableObject {
 
     @Published var currentVideoID: String?
     @Published var currentStart: Double?
+    @Published var currentPlaylist: String?
+    @Published var currentIndex: Int?
     @Published var canGoBack = false
     @Published var canGoForward = false
 
@@ -113,9 +117,13 @@ final class BrowserModel: NSObject, ObservableObject {
         if path.hasPrefix("/watch") || path.hasPrefix("/shorts/") || path.hasPrefix("/live/") {
             currentVideoID = YouTube.videoID(from: string)
             currentStart = YouTube.startTime(from: string)
+            currentPlaylist = YouTube.playlistID(from: string)
+            currentIndex = YouTube.playlistIndex(from: string)
         } else {
             currentVideoID = nil
             currentStart = nil
+            currentPlaylist = nil
+            currentIndex = nil
         }
     }
 }

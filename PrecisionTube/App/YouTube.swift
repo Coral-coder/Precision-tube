@@ -27,6 +27,22 @@ enum YouTube {
         return nil
     }
 
+    /// Playlist ID from a `list=` parameter (ignores YouTube's auto-generated "radio" mixes).
+    static func playlistID(from text: String) -> String? {
+        guard let comps = URLComponents(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let list = comps.queryItems?.first(where: { $0.name == "list" })?.value,
+              !list.isEmpty, !list.hasPrefix("RD") else { return nil }
+        return list
+    }
+
+    /// 0-based position in the playlist from YouTube's 1-based `index=`.
+    static func playlistIndex(from text: String) -> Int? {
+        guard let comps = URLComponents(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let value = comps.queryItems?.first(where: { $0.name == "index" })?.value,
+              let n = Int(value), n > 0 else { return nil }
+        return n - 1
+    }
+
     /// Start time from a `t=` / `start=` parameter, if any (seconds or 1h2m3s).
     static func startTime(from text: String) -> Double? {
         guard let comps = URLComponents(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
