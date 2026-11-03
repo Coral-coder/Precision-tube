@@ -615,45 +615,59 @@ struct VideoSurface: UIViewRepresentable {
 
 // MARK: - Buttons that repeat while held
 
+/// Tap to do it once; hold to keep doing it. Built on a real Button so a swipe that starts on
+/// it still scrolls the page (a raw drag gesture would swallow the scroll).
 struct RepeatButton<Content: View>: View {
     let action: @MainActor () -> Void
     var translucent = false
     var fillHeight = false
     @ViewBuilder let label: () -> Content
 
-    @State private var pressed = false
     @State private var repeatTask: Task<Void, Never>?
+    @State private var repeated = false
 
     var body: some View {
-        label()
+        Button {
+            // Released: a hold already did its work; a tap does it once.
+            if repeated { repeated = false; return }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            action()
+        } label: {
+            label()
+        }
+        .buttonStyle(RepeatPressStyle(translucent: translucent, fillHeight: fillHeight) { pressing in
+            repeatTask?.cancel()
+            repeatTask = nil
+            guard pressing else { return }
+            repeated = false
+            repeatTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard !Task.isCancelled else { return }
+                repeated = true
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                while !Task.isCancelled {
+                    action()
+                    try? await Task.sleep(nanoseconds: 85_000_000)
+                }
+            }
+        })
+    }
+}
+
+private struct RepeatPressStyle: ButtonStyle {
+    let translucent: Bool
+    let fillHeight: Bool
+    let onPressingChanged: (Bool) -> Void
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
             .frame(maxWidth: .infinity, minHeight: 56, maxHeight: fillHeight ? .infinity : nil)
             .foregroundStyle(Color.accentColor)
             .background(RoundedRectangle(cornerRadius: 12)
-                .fill(pressed ? Color.accentColor.opacity(0.3) : Color(.secondarySystemBackground).opacity(translucent ? 0.55 : 1)))
+                .fill(configuration.isPressed ? Color.accentColor.opacity(0.3)
+                      : Color(.secondarySystemBackground).opacity(translucent ? 0.55 : 1)))
             .contentShape(RoundedRectangle(cornerRadius: 12))
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        guard !pressed else { return }
-                        pressed = true
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        action()
-                        repeatTask = Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 380_000_000)
-                            while !Task.isCancelled {
-                                action()
-                                try? await Task.sleep(nanoseconds: 85_000_000)
-                            }
-                        }
-                    }
-                    .onEnded { _ in
-                        pressed = false
-                        repeatTask?.cancel()
-                        repeatTask = nil
-                    }
-            )
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction { action() }
+            .onChange(of: configuration.isPressed) { _, pressing in onPressingChanged(pressing) }
     }
 }
 
