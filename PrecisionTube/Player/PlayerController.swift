@@ -25,6 +25,13 @@ final class PlayerController: NSObject, ObservableObject {
     @Published private(set) var ready = false
     @Published private(set) var errorMessage: String?
     @Published var muted = false { didSet { js("ptMute(\(muted))"); frameJS("__pt.mute(\(muted))") } }
+    /// Closed captions, remembered between launches. YouTube's own caption track, in the
+    /// device language when the video has it.
+    @Published var captionsOn = UserDefaults.standard.bool(forKey: "captionsOn") {
+        didSet { UserDefaults.standard.set(captionsOn, forKey: "captionsOn"); applyCaptions() }
+    }
+    /// Whether the current video has any captions (nil until YouTube says).
+    @Published private(set) var captionsAvailable: Bool?
 
     @Published var loopA: Double?
     @Published var loopB: Double?
@@ -91,6 +98,7 @@ final class PlayerController: NSObject, ObservableObject {
         playlistID = playlist
         playlistIndex = index
         playlistCount = nil
+        captionsAvailable = nil
         currentTime = start
         duration = 0
         isPlaying = false
@@ -221,6 +229,15 @@ final class PlayerController: NSObject, ObservableObject {
         webView.evaluateJavaScript(script, completionHandler: nil)
     }
 
+    private var captionLanguage: String {
+        (Locale.current.language.languageCode?.identifier ?? "en").filter { $0.isLetter }
+    }
+
+    private func applyCaptions() {
+        frameJS("__pt.captions(\(captionsOn), '\(captionLanguage)')")
+        js("ptCaptions(\(captionsOn), '\(captionLanguage)')")
+    }
+
     private func frameJS(_ script: String) {
         guard let frame = videoFrame else { return }
         webView.evaluateJavaScript("window.__pt && " + script, in: frame, in: .page, completionHandler: nil)
@@ -237,6 +254,7 @@ final class PlayerController: NSObject, ObservableObject {
             videoFrame = frame
             preciseMode = true
             frameJS("__pt.rate(\(desiredRate))")
+            applyCaptions()
             if directMode {
                 // No IFrame API here: show the first frame, then wait paused.
                 ready = true
@@ -272,8 +290,14 @@ final class PlayerController: NSObject, ObservableObject {
             loopA = nil; loopB = nil; loopOn = false
             fpsOverride = onVideoChanged?(id, playlistID, playlistIndex) ?? nil
             if desiredRate != 1 { setRate(desiredRate) }
+            captionsAvailable = nil
+            applyCaptions()
+        case "captions":
+            let n = (msg["available"] as? Int) ?? 0
+            if n > 0 { captionsAvailable = true } else if captionsAvailable == nil { captionsAvailable = false }
         case "ready":
             ready = true
+            applyCaptions()
             if desiredRate != 1, videoFrame == nil { js("ptRate(\(desiredRate))") }
             if muted { js("ptMute(true)") }
         case "error":
@@ -319,7 +343,7 @@ final class PlayerController: NSObject, ObservableObject {
         '.ytp-overflow-button','.ytp-share-button','.ytp-watch-later-button','.ytp-copylink-button',
         '.branding-img','.iv-branding','.annotation','.ytp-suggested-action','.ytp-featured-product',
         '.ytp-chapter-container','.ytp-player-content.ytp-iv-player-content',
-        '.html5-video-player > *:not(.html5-video-container):not(.ytp-spinner):not(.ytp-error):not(.ytp-error-content)']
+        '.html5-video-player > *:not(.html5-video-container):not(.ytp-spinner):not(.ytp-error):not(.ytp-error-content):not(.ytp-caption-window-container)']
         .join(',');
       var rule=css.textContent+'{display:none !important;}';
       css.textContent=rule;
@@ -328,6 +352,27 @@ final class PlayerController: NSObject, ObservableObject {
       try{ (document.head||document.documentElement).appendChild(css); }catch(e){}
       try{ var sheet=new CSSStyleSheet(); sheet.replaceSync(rule); document.adoptedStyleSheets=document.adoptedStyleSheets.concat([sheet]); }catch(e){}
       var hideSelectors=rule.slice(0, rule.indexOf('{'));
+      var captionsOn=false, captionLang='en';
+      function ytPlayer(){ return document.getElementById('movie_player') || document.querySelector('.html5-video-player'); }
+      function applyCaptions(tries){
+        var mp=ytPlayer();
+        if (captionsOn){
+          document.querySelectorAll('.ytp-caption-window-container').forEach(function(el){ el.style.removeProperty('display'); });
+        }
+        try{
+          if (!mp || !mp.loadModule){ if ((tries||0)<20) setTimeout(function(){ applyCaptions((tries||0)+1); }, 500); return; }
+          if (!captionsOn){ mp.unloadModule('captions'); return; }
+          mp.loadModule('captions');
+          var list=(mp.getOption && mp.getOption('captions','tracklist')) || [];
+          if (!list.length){
+            if ((tries||0)<16){ setTimeout(function(){ applyCaptions((tries||0)+1); }, 500); return; }
+            post({type:'captions', available:0}); return;
+          }
+          var pick=list.filter(function(t){ return (t.languageCode||'').indexOf(captionLang)===0; })[0] || list[0];
+          mp.setOption('captions','track',{languageCode:pick.languageCode});
+          post({type:'captions', available:list.length});
+        }catch(e){}
+      }
       var keepSelector='.ytp-spinner,.ytp-error,.ytp-error-content,script,style,link';
       function hideOverlays(){
         try{ document.querySelectorAll(hideSelectors).forEach(function(el){ el.style.setProperty('display','none','important'); }); }catch(e){}
@@ -341,6 +386,7 @@ final class PlayerController: NSObject, ObservableObject {
             for (var c=p.firstElementChild; c; c=c.nextElementSibling){
               if (c===n || c.tagName==='VIDEO') continue;
               if (c.matches(keepSelector) || c.querySelector('.ytp-error:not([style*="display: none"]), video')) continue;
+              if (captionsOn && (c.matches('.ytp-caption-window-container') || c.querySelector('.ytp-caption-window-container'))) continue;
               if (c.style.getPropertyValue('display')!=='none') c.style.setProperty('display','none','important');
             }
             n=p;
@@ -414,6 +460,7 @@ final class PlayerController: NSObject, ObservableObject {
         rate: function(r){ desiredRate=r; var v=grab(); if (v) v.playbackRate=r; },
         pause: function(){ var v=grab(); if (v) v.pause(); },
         mute: function(m){ var v=grab(); if (v) v.muted=!!m; },
+        captions: function(on, lang){ captionsOn=!!on; captionLang=lang||'en'; applyCaptions(0); },
         zoom: function(s,x,y){ var v=grab(); var t=v ? (v.closest('.html5-video-player') || document.body) : document.body;
           t.style.transformOrigin='50% 50%'; t.style.transform='translate('+x+'px,'+y+'px) scale('+s+')'; },
         play: function(){ var v=grab(); if (v) v.play(); }
@@ -497,6 +544,21 @@ final class PlayerController: NSObject, ObservableObject {
     function ptSeek(t){ if (player){ player.seekTo(t, true); report(true); } }
     function ptStep(n, fps){ if (player){ player.pauseVideo(); player.seekTo(Math.max(0, player.getCurrentTime()+n/fps), true); report(true); } }
     function ptRate(r){ if (player) player.setPlaybackRate(Math.max(0.25, r)); }
+    function ptCaptions(on, lang){
+      if (!player || !player.loadModule) return;
+      try{
+        if (!on){ player.unloadModule('captions'); return; }
+        player.loadModule('captions');
+        setTimeout(function(){
+          try{
+            var l=player.getOption('captions','tracklist') || [];
+            var p=l.filter(function(t){ return (t.languageCode||'').indexOf(lang)===0; })[0] || l[0];
+            if (p) player.setOption('captions','track',{languageCode:p.languageCode});
+            post({type:'captions', available:l.length});
+          }catch(e){}
+        }, 2000);
+      }catch(e){}
+    }
     function ptMute(m){ if (player){ if (m) player.mute(); else player.unMute(); } }
     function ptZoom(s,x,y){ document.getElementById('wrap').style.transform='translate('+x+'px,'+y+'px) scale('+s+')'; }
     </script>
