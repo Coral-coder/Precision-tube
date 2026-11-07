@@ -119,6 +119,7 @@ struct PlayerScreen: View {
                     }
                     Button { player.nextVideo() } label: { Image(systemName: "forward.end.fill") }
                 }
+                captionsButton
                 Button { edgeButtons.toggle() } label: {
                     Image(systemName: edgeButtons ? "arrow.left.and.right.circle.fill" : "arrow.left.and.right.circle")
                 }
@@ -213,6 +214,13 @@ struct PlayerScreen: View {
         .opacity(0.85)
         .environment(\.colorScheme, .dark)
         .animation(.easeInOut(duration: 0.25), value: overlayVisible)
+    }
+
+    private var captionsButton: some View {
+        Button { player.captionsOn.toggle() } label: {
+            Image(systemName: player.captionsOn ? "captions.bubble.fill" : "captions.bubble")
+        }
+        .accessibilityLabel(player.captionsOn ? "Turn captions off" : "Turn captions on")
     }
 
     private var markButton: some View {
@@ -469,6 +477,9 @@ struct PlayerScreen: View {
             Text(player.preciseMode ? "Precise mode" : (player.ready ? "Basic mode" : "Loading…"))
             Text("·")
             Text(fpsLabel)
+            if player.captionsOn && player.captionsAvailable == false {
+                Text("· no captions for this video")
+            }
             Spacer()
         }
         .font(.caption)
@@ -487,6 +498,7 @@ struct PlayerScreen: View {
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
             if player.videoID != nil {
+                captionsButton
                 Button { focusMode.toggle() } label: {
                     Image(systemName: focusMode ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
                 }
