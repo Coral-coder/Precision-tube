@@ -97,7 +97,7 @@ struct ShapeStudioView: View {
                 }
             }
         }
-        .navigationTitle("Shape Studio")
+        .navigationTitle("Shape Studio (Experimental)")
         .navigationBarTitleDisplayMode(.inline)
         .fileImporter(isPresented: $importing, allowedContentTypes: Self.modelTypes) { picked in
             if case .success(let url) = picked { load(url) }
@@ -151,6 +151,14 @@ struct ShapeStudioView: View {
     private func form(_ res: StudioResult?, model: StitchModel?) -> some View {
         Form {
             Section {
+                Label {
+                    Text("Experimental. Patterns and previews are estimates from your gauge, so crochet a few rounds and check the stitch counts before committing to a project.")
+                        .font(.footnote)
+                } icon: {
+                    Image(systemName: "flask").foregroundStyle(.orange)
+                }
+            }
+            Section {
                 Picker("Start from", selection: $source) {
                     ForEach(Source.allCases) { Text($0.rawValue).tag($0) }
                 }
@@ -192,7 +200,7 @@ struct ShapeStudioView: View {
                         Button {
                             store.patterns.append(UserPattern(
                                 title: res.title, craft: .crochet,
-                                notes: "Made in Shape Studio for a gauge of \(format(gauge.stitchesPer10cm)) stitches × \(format(gauge.roundsPer10cm)) rounds per 10 cm. US terms, worked in a continuous spiral; use a stitch marker. inc = 2 sc in one stitch, dec = sc2tog (invisible decrease looks best).",
+                                notes: "Made in Shape Studio (experimental: check stitch counts on a test piece) for a gauge of \(format(gauge.stitchesPer10cm)) stitches × \(format(gauge.roundsPer10cm)) rounds per 10 cm. US terms, worked in a continuous spiral; use a stitch marker. inc = 2 sc in one stitch, dec = sc2tog (invisible decrease looks best).",
                                 body: res.rows.joined(separator: "\n")))
                             saved = true
                         } label: {
@@ -362,6 +370,9 @@ struct PatternShapeView: View {
         VStack(spacing: 0) {
             ShapeSceneView(model: model, ghost: nil, yarn: UIColor(yarn))
             Form {
+                Label("Experimental preview: an estimate from your gauge.", systemImage: "flask")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 if pieces.count > 1 {
                     Picker("Piece", selection: $pieceID) {
                         ForEach(pieces) { Text($0.name).tag($0.id) }
