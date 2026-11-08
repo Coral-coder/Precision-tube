@@ -13,10 +13,10 @@ struct ToolsView: View {
                 }
                 Section {
                     NavigationLink { ShapeStudioView() } label: {
-                        Label("Shape Studio: 3D shape ↔ pattern", systemImage: "cube.transparent")
+                        Label("Shape Studio: 3D shape ↔ pattern (experimental)", systemImage: "cube.transparent")
                     }
                 } footer: {
-                    Text("Turn a shape or a 3D model into an amigurumi pattern, or see a pattern in 3D.")
+                    Text("Experimental: turn a shape or a 3D model into an amigurumi pattern, or see a pattern in 3D. Treat the results as a starting point.")
                 }
                 Section("Calculators") {
                     NavigationLink { IncreaseEvenlyView() } label: { Label("Increase / decrease evenly", systemImage: "arrow.up.and.down.text.horizontal") }

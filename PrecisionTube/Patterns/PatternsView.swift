@@ -234,7 +234,7 @@ struct PatternDetailView: View {
                     NavigationLink {
                         PatternShapeView(title: p.title, pieces: pieces)
                     } label: {
-                        Label("See it in 3D", systemImage: "cube.transparent")
+                        Label("See it in 3D (experimental)", systemImage: "cube.transparent")
                     }
                 }
                 if let query = p.videoSearch {
