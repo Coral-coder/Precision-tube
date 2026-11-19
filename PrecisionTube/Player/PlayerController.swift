@@ -32,6 +32,13 @@ final class PlayerController: NSObject, ObservableObject {
     }
     /// Whether the current video has any captions (nil until YouTube says).
     @Published private(set) var captionsAvailable: Bool?
+    /// For a video in another language, show captions translated into the device language
+    /// (YouTube's auto-translate), even when captions are off.
+    @Published var autoTranslateCaptions = UserDefaults.standard.object(forKey: "autoTranslateCaptions") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(autoTranslateCaptions, forKey: "autoTranslateCaptions"); applyCaptions() }
+    }
+    /// e.g. "Captions translated from Spanish", when that's what's showing.
+    @Published private(set) var captionNote: String?
 
     @Published var loopA: Double?
     @Published var loopB: Double?
@@ -99,6 +106,7 @@ final class PlayerController: NSObject, ObservableObject {
         playlistIndex = index
         playlistCount = nil
         captionsAvailable = nil
+        captionNote = nil
         currentTime = start
         duration = 0
         isPlaying = false
@@ -125,6 +133,7 @@ final class PlayerController: NSObject, ObservableObject {
             .replacingOccurrences(of: "__VIDEO_ID__", with: videoID)
             .replacingOccurrences(of: "__START__", with: String(format: "%.3f", currentTime))
             .replacingOccurrences(of: "__ORIGIN__", with: Self.origin)
+            .replacingOccurrences(of: "__LANG__", with: captionLanguage)
             .replacingOccurrences(of: "__LIST__", with: (playlistID ?? "").filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" })
             .replacingOccurrences(of: "__INDEX__", with: String(playlistIndex ?? -1))
         webView.loadHTMLString(html, baseURL: URL(string: Self.origin + "/"))
@@ -150,6 +159,7 @@ final class PlayerController: NSObject, ObservableObject {
             URLQueryItem(name: "start", value: String(Int(currentTime))),
             URLQueryItem(name: "list", value: playlistID), URLQueryItem(name: "index", value: playlistIndex.map { String($0) }),
             URLQueryItem(name: "origin", value: Self.origin), URLQueryItem(name: "widget_referrer", value: Self.origin),
+            URLQueryItem(name: "hl", value: captionLanguage), URLQueryItem(name: "cc_lang_pref", value: captionLanguage),
         ]
         comps.queryItems = comps.queryItems?.filter { $0.value != nil }
         var request = URLRequest(url: comps.url!)
@@ -234,8 +244,12 @@ final class PlayerController: NSObject, ObservableObject {
     }
 
     private func applyCaptions() {
-        frameJS("__pt.captions(\(captionsOn), '\(captionLanguage)')")
-        js("ptCaptions(\(captionsOn), '\(captionLanguage)')")
+        // The script in YouTube's frame can read the video's language; the IFrame API fallback can't.
+        if videoFrame != nil {
+            frameJS("__pt.captions(\(captionsOn), '\(captionLanguage)', \(autoTranslateCaptions))")
+        } else {
+            js("ptCaptions(\(captionsOn), '\(captionLanguage)')")
+        }
     }
 
     private func frameJS(_ script: String) {
@@ -291,10 +305,17 @@ final class PlayerController: NSObject, ObservableObject {
             fpsOverride = onVideoChanged?(id, playlistID, playlistIndex) ?? nil
             if desiredRate != 1 { setRate(desiredRate) }
             captionsAvailable = nil
+            captionNote = nil
             applyCaptions()
         case "captions":
             let n = (msg["available"] as? Int) ?? 0
             if n > 0 { captionsAvailable = true } else if captionsAvailable == nil { captionsAvailable = false }
+            let from = (msg["from"] as? String) ?? ""
+            if (msg["translated"] as? Bool) == true {
+                captionNote = from.isEmpty ? "Captions translated" : "Captions translated from \(from)"
+            } else {
+                captionNote = nil
+            }
         case "ready":
             ready = true
             applyCaptions()
@@ -352,25 +373,53 @@ final class PlayerController: NSObject, ObservableObject {
       try{ (document.head||document.documentElement).appendChild(css); }catch(e){}
       try{ var sheet=new CSSStyleSheet(); sheet.replaceSync(rule); document.adoptedStyleSheets=document.adoptedStyleSheets.concat([sheet]); }catch(e){}
       var hideSelectors=rule.slice(0, rule.indexOf('{'));
-      var captionsOn=false, captionLang='en';
+      var captionsOn=false, captionLang='en', autoTranslate=true, showCaptions=false;
       function ytPlayer(){ return document.getElementById('movie_player') || document.querySelector('.html5-video-player'); }
-      function applyCaptions(tries){
-        var mp=ytPlayer();
-        if (captionsOn){
-          document.querySelectorAll('.ytp-caption-window-container').forEach(function(el){ el.style.removeProperty('display'); });
-        }
+      function baseLang(code){ return (code||'').split('-')[0].toLowerCase(); }
+      // The video's spoken language, from YouTube's own data (no need to switch captions on).
+      function videoLanguage(mp){
         try{
-          if (!mp || !mp.loadModule){ if ((tries||0)<20) setTimeout(function(){ applyCaptions((tries||0)+1); }, 500); return; }
-          if (!captionsOn){ mp.unloadModule('captions'); return; }
+          var pr=mp.getPlayerResponse && mp.getPlayerResponse();
+          var r=pr && pr.captions && pr.captions.playerCaptionsTracklistRenderer;
+          var tracks=(r && r.captionTracks) || [];
+          if (!tracks.length) return null;
+          var asr=tracks.filter(function(t){ return t.kind==='asr'; })[0];
+          return (asr || tracks[0]).languageCode || null;
+        }catch(e){ return null; }
+      }
+      function applyCaptions(tries){
+        tries=tries||0;
+        var mp=ytPlayer();
+        if (!mp || !mp.loadModule){ if (tries<20) setTimeout(function(){ applyCaptions(tries+1); }, 500); return; }
+        try{
+          var spoken=videoLanguage(mp);
+          if (!spoken && !captionsOn && autoTranslate && tries<10){ setTimeout(function(){ applyCaptions(tries+1); }, 1000); return; }
+          var foreign=!!spoken && baseLang(spoken)!==captionLang;
+          if (!captionsOn && !(autoTranslate && foreign)){
+            showCaptions=false;
+            mp.unloadModule('captions');
+            post({type:'captions', available:spoken?1:0, translated:false});
+            return;
+          }
+          showCaptions=true;
+          document.querySelectorAll('.ytp-caption-window-container').forEach(function(el){ el.style.removeProperty('display'); });
           mp.loadModule('captions');
           var list=(mp.getOption && mp.getOption('captions','tracklist')) || [];
           if (!list.length){
-            if ((tries||0)<16){ setTimeout(function(){ applyCaptions((tries||0)+1); }, 500); return; }
-            post({type:'captions', available:0}); return;
+            if (tries<16){ setTimeout(function(){ applyCaptions(tries+1); }, 500); return; }
+            post({type:'captions', available:0, translated:false}); return;
           }
-          var pick=list.filter(function(t){ return (t.languageCode||'').indexOf(captionLang)===0; })[0] || list[0];
-          mp.setOption('captions','track',{languageCode:pick.languageCode});
-          post({type:'captions', available:list.length});
+          // Captions already in my language? Use them.
+          var mine=list.filter(function(t){ return baseLang(t.languageCode)===captionLang; })[0];
+          if (mine){ mp.setOption('captions','track',mine); post({type:'captions', available:list.length, translated:false}); return; }
+          // Otherwise translate the video's own captions into my language.
+          var src=list.filter(function(t){ return baseLang(t.languageCode)===baseLang(spoken); })[0] || list[0];
+          var langs=(mp.getOption('captions','translationLanguages')) || [];
+          var to=langs.filter(function(l){ return baseLang(l.languageCode)===captionLang; })[0];
+          var track=Object.assign({}, src);
+          if (to) track.translationLanguage=to;
+          mp.setOption('captions','track',track);
+          post({type:'captions', available:list.length, translated:!!to, from:(src.languageName||src.languageCode||'')});
         }catch(e){}
       }
       var keepSelector='.ytp-spinner,.ytp-error,.ytp-error-content,script,style,link';
@@ -386,7 +435,7 @@ final class PlayerController: NSObject, ObservableObject {
             for (var c=p.firstElementChild; c; c=c.nextElementSibling){
               if (c===n || c.tagName==='VIDEO') continue;
               if (c.matches(keepSelector) || c.querySelector('.ytp-error:not([style*="display: none"]), video')) continue;
-              if (captionsOn && (c.matches('.ytp-caption-window-container') || c.querySelector('.ytp-caption-window-container'))) continue;
+              if (showCaptions && (c.matches('.ytp-caption-window-container') || c.querySelector('.ytp-caption-window-container'))) continue;
               if (c.style.getPropertyValue('display')!=='none') c.style.setProperty('display','none','important');
             }
             n=p;
@@ -460,7 +509,7 @@ final class PlayerController: NSObject, ObservableObject {
         rate: function(r){ desiredRate=r; var v=grab(); if (v) v.playbackRate=r; },
         pause: function(){ var v=grab(); if (v) v.pause(); },
         mute: function(m){ var v=grab(); if (v) v.muted=!!m; },
-        captions: function(on, lang){ captionsOn=!!on; captionLang=lang||'en'; applyCaptions(0); },
+        captions: function(on, lang, auto){ captionsOn=!!on; captionLang=lang||'en'; autoTranslate=(auto!==false); applyCaptions(0); },
         zoom: function(s,x,y){ var v=grab(); var t=v ? (v.closest('.html5-video-player') || document.body) : document.body;
           t.style.transformOrigin='50% 50%'; t.style.transform='translate('+x+'px,'+y+'px) scale('+s+')'; },
         play: function(){ var v=grab(); if (v) v.play(); }
@@ -487,7 +536,8 @@ final class PlayerController: NSObject, ObservableObject {
     function onYouTubeIframeAPIReady(){
       player=new YT.Player('player',{videoId:'__VIDEO_ID__', width:'100%', height:'100%',
         playerVars:{playsinline:1, controls:0, rel:0, fs:0, iv_load_policy:3, disablekb:1,
-                    start:Math.floor(START), origin:'__ORIGIN__', widget_referrer:'__ORIGIN__'},
+                    start:Math.floor(START), origin:'__ORIGIN__', widget_referrer:'__ORIGIN__',
+                    hl:'__LANG__', cc_lang_pref:'__LANG__'},
         events:{
           onReady:function(){
             if (LIST){
@@ -552,9 +602,14 @@ final class PlayerController: NSObject, ObservableObject {
         setTimeout(function(){
           try{
             var l=player.getOption('captions','tracklist') || [];
-            var p=l.filter(function(t){ return (t.languageCode||'').indexOf(lang)===0; })[0] || l[0];
-            if (p) player.setOption('captions','track',{languageCode:p.languageCode});
-            post({type:'captions', available:l.length});
+            var mine=l.filter(function(t){ return (t.languageCode||'').indexOf(lang)===0; })[0];
+            if (mine){ player.setOption('captions','track',mine); post({type:'captions', available:l.length}); return; }
+            if (!l.length){ post({type:'captions', available:0}); return; }
+            var langs=player.getOption('captions','translationLanguages') || [];
+            var to=langs.filter(function(x){ return (x.languageCode||'').indexOf(lang)===0; })[0];
+            var track=Object.assign({}, l[0]); if (to) track.translationLanguage=to;
+            player.setOption('captions','track',track);
+            post({type:'captions', available:l.length, translated:!!to, from:(l[0].languageName||l[0].languageCode||'')});
           }catch(e){}
         }, 2000);
       }catch(e){}
