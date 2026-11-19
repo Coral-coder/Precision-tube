@@ -477,7 +477,9 @@ struct PlayerScreen: View {
             Text(player.preciseMode ? "Precise mode" : (player.ready ? "Basic mode" : "Loading…"))
             Text("·")
             Text(fpsLabel)
-            if player.captionsOn && player.captionsAvailable == false {
+            if let note = player.captionNote {
+                Text("· \(note)")
+            } else if player.captionsOn && player.captionsAvailable == false {
                 Text("· no captions for this video")
             }
             Spacer()
@@ -516,6 +518,7 @@ struct PlayerScreen: View {
                         }
                     }
                     Toggle("Mute", isOn: $player.muted)
+                    Toggle("Translate captions of other-language videos", isOn: $player.autoTranslateCaptions)
                     Toggle("Frame buttons on the edges (landscape)", isOn: $edgeButtons)
                     Toggle("Tap through to YouTube", isOn: $interactWithYouTube)
                     if let id = player.videoID {
