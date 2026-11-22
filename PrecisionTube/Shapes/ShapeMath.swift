@@ -537,17 +537,52 @@ struct StitchModel: Equatable {
         }
 
         // Stuffing also squashes a piece a little: wider than its rounds alone would say, less tall.
+        var radii = radius
         if puff > 0 {
             let squash = 1 - 0.4 * min(1, puff)
             for i in 0..<n { z[i] *= squash }
             capZ *= squash
+
+            // Stuffed yarn is a stiff balloon: no corners or flat walls. Smooth the outline (the
+            // poles stay put) and let it bulge back out to its widest round.
+            var pts = [SIMD2<Double>(0, 0)] + (0..<n).map { SIMD2(radius[$0], z[$0]) }
+            if closed { pts.append(SIMD2(0, capZ)) }
+            let widest = radius.max() ?? 0
+            let passes = puff >= 0.5 ? 6 : 3
+            for _ in 0..<passes where pts.count > 2 {
+                var next = pts
+                for j in 1..<(pts.count - 1) {
+                    next[j] = pts[j] * 0.5 + (pts[j - 1] + pts[j + 1]) * 0.25
+                }
+                // The poles stay on the axis and only move up or down, toward their neighbour, so
+                // the ends round over flat instead of coming to a point.
+                next[0] = SIMD2(0, pts[0].y * 0.5 + pts[1].y * 0.5)
+                let last = pts.count - 1
+                if closed {
+                    next[last] = SIMD2(0, pts[last].y * 0.5 + pts[last - 1].y * 0.5)
+                } else {
+                    // An open end (a piece still being made) keeps its last edge where it is.
+                    next[last] = pts[last]
+                }
+                pts = next
+            }
+            // Keep the start at the floor.
+            let floor = pts[0].y
+            pts = pts.map { SIMD2($0.x, $0.y - floor) }
+            let smoothedWidest = pts.map(\.x).max() ?? 0
+            let inflate = smoothedWidest > 0 ? widest / smoothedWidest * (1 + 0.06 * min(1, puff)) : 1
+            for i in 0..<n {
+                radii[i] = pts[i + 1].x * inflate
+                z[i] = pts[i + 1].y
+            }
+            if closed { capZ = pts[pts.count - 1].y }
         }
 
         var bands: [Band] = []
         var bandColors: [Int] = []
         var p = SIMD2<Double>(0, 0)
         for i in 0..<n {
-            let next = SIMD2(radius[i], z[i])
+            let next = SIMD2(radii[i], z[i])
             bands.append(Band(bottom: p, top: next, stitches: counts[i]))
             bandColors.append(i < colors.count ? colors[i] : 0)
             p = next
@@ -563,7 +598,7 @@ struct StitchModel: Equatable {
         // flaring a little, like a cup around the round before.
         for collar in collars where collar.round >= 1 && collar.round <= bands.count {
             let edge = bands[collar.round - 1].top
-            let tip = SIMD2(edge.x + gauge.h * 0.8, max(0, edge.y - gauge.h * 1.3))
+            let tip = SIMD2(edge.x + gauge.h * 1.2, max(0, edge.y - gauge.h * 1.1))
             model.bands.append(Band(bottom: edge, top: tip, stitches: collar.count ?? counts[collar.round - 1]))
             model.bandColors.append(bandColors[collar.round - 1])
         }
