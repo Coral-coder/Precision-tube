@@ -43,7 +43,7 @@ struct ShapeStudioView: View {
     /// All of your patterns, plus the built-in ones that are written round by round.
     private var availablePatterns: [PatternContent] {
         store.patterns.map(\.content) + PatternLibrary.all.filter {
-            !PatternToShape.pieces(from: $0.sections.flatMap(\.rows)).isEmpty
+            !PatternToShape.pieces(from: $0.shapeLines).isEmpty
         }
     }
 
@@ -54,7 +54,7 @@ struct ShapeStudioView: View {
 
     private var selectedPieces: [PatternToShape.Piece] {
         guard let p = selectedPattern else { return [] }
-        return PatternToShape.pieces(from: p.sections.flatMap(\.rows))
+        return PatternToShape.pieces(from: p.shapeLines)
     }
 
     private var result: StudioResult? {

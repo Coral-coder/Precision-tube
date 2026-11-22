@@ -204,8 +204,24 @@ struct PatternDetailView: View {
         return pattern
     }
 
+    /// Every tickable row in order: (its ID for progress, its text).
+    private func orderedRows(_ p: PatternContent) -> [(id: Int, text: String)] {
+        var out: [(id: Int, text: String)] = []
+        var start = 0
+        for section in p.sections {
+            for (offset, row) in section.rows.enumerated() {
+                out.append((section.ids?[offset] ?? start + offset, row))
+            }
+            start += section.rows.count
+        }
+        return out
+    }
+
     var body: some View {
         let p = current
+        let rows = orderedRows(p)
+        let next = rows.first { !store.isDone(pattern: p.id, row: $0.id) }
+        ScrollViewReader { proxy in
         List {
             if p.summary != nil || !p.materials.isEmpty || p.notes != nil {
                 SwiftUI.Section {
@@ -229,7 +245,7 @@ struct PatternDetailView: View {
                         Label("Watch the video", systemImage: "play.rectangle.fill")
                     }
                 }
-                let pieces = PatternToShape.pieces(from: p.sections.flatMap(\.rows))
+                let pieces = PatternToShape.pieces(from: p.shapeLines)
                 if !pieces.isEmpty {
                     NavigationLink {
                         PatternShapeView(title: p.title, pieces: pieces)
@@ -246,14 +262,38 @@ struct PatternDetailView: View {
 
             ForEach(Array(p.sections.enumerated()), id: \.offset) { _, section in
                 let start = rowStart(p, section: section)
-                SwiftUI.Section(section.title) {
+                SwiftUI.Section {
                     ForEach(Array(section.rows.enumerated()), id: \.offset) { offset, row in
-                        RowCheck(text: row, done: store.isDone(pattern: p.id, row: start + offset)) {
-                            store.toggle(pattern: p.id, row: start + offset)
+                        let rowID = section.ids?[offset] ?? start + offset
+                        RowCheck(text: row, done: store.isDone(pattern: p.id, row: rowID), current: rowID == next?.id) {
+                            store.toggle(pattern: p.id, row: rowID)
+                        }
+                        .id(rowID)
+                    }
+                } header: {
+                    HStack {
+                        Text(section.title)
+                        if let n = section.repeatCount, n > 1 {
+                            Text("Make \(n)")
+                                .font(.caption2.weight(.bold))
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.2), in: Capsule())
                         }
                     }
                 }
             }
+        }
+        .safeAreaInset(edge: .bottom) {
+            nextBar(p, rows: rows, next: next, proxy: proxy)
+        }
+        .onAppear {
+            // Open where you left off.
+            if let next, next.id != rows.first?.id {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    withAnimation { proxy.scrollTo(next.id, anchor: .center) }
+                }
+            }
+        }
         }
         .navigationTitle(p.title.isEmpty ? "Pattern" : p.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -271,6 +311,64 @@ struct PatternDetailView: View {
         .sheet(item: $editing) { PatternEditor(pattern: $0) }
     }
 
+    /// The next row to do, with a big Done button, always on screen.
+    @ViewBuilder
+    private func nextBar(_ p: PatternContent, rows: [(id: Int, text: String)], next: (id: Int, text: String)?,
+                         proxy: ScrollViewProxy) -> some View {
+        if !rows.isEmpty {
+            HStack(spacing: 12) {
+                if let next {
+                    Button {
+                        withAnimation { proxy.scrollTo(next.id, anchor: .center) }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Next").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                            Text(next.text).font(.callout.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Label("All done!", systemImage: "checkmark.seal.fill")
+                        .font(.headline).foregroundStyle(.green)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                // Undo: un-tick the last ticked row before the next one.
+                if let last = lastDone(p, rows: rows, before: next?.id) {
+                    Button {
+                        store.toggle(pattern: p.id, row: last)
+                        withAnimation { proxy.scrollTo(last, anchor: .center) }
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward").frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Undo")
+                }
+                if let next {
+                    Button {
+                        store.toggle(pattern: p.id, row: next.id)
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        if let after = rows.drop(while: { $0.id != next.id }).dropFirst()
+                            .first(where: { !store.isDone(pattern: p.id, row: $0.id) }) {
+                            withAnimation { proxy.scrollTo(after.id, anchor: .center) }
+                        }
+                    } label: {
+                        Label("Done", systemImage: "checkmark").font(.headline).frame(height: 40)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.bar)
+        }
+    }
+
+    private func lastDone(_ p: PatternContent, rows: [(id: Int, text: String)], before nextID: Int?) -> Int? {
+        let upTo = nextID.flatMap { id in rows.firstIndex { $0.id == id } } ?? rows.count
+        return rows[..<upTo].last { store.isDone(pattern: p.id, row: $0.id) }?.id
+    }
+
     private func rowStart(_ p: PatternContent, section: PatternSection) -> Int {
         var n = 0
         for s in p.sections {
@@ -282,7 +380,7 @@ struct PatternDetailView: View {
 
     private func counter(_ p: PatternContent) -> some View {
         let value = store.patternCounters[p.id] ?? 0
-        let done = store.progress[p.id]?.count ?? 0
+        let done = orderedRows(p).filter { store.isDone(pattern: p.id, row: $0.id) }.count
         return HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Row counter").font(.subheadline.weight(.semibold))
@@ -308,15 +406,17 @@ struct PatternDetailView: View {
 struct RowCheck: View {
     let text: String
     let done: Bool
+    var current = false
     let toggle: () -> Void
 
     var body: some View {
         Button(action: toggle) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: done ? "checkmark.circle.fill" : "circle")
+                Image(systemName: done ? "checkmark.circle.fill" : (current ? "arrow.right.circle.fill" : "circle"))
                     .font(.title3)
-                    .foregroundStyle(done ? Color.green : Color.secondary)
+                    .foregroundStyle(done ? Color.green : (current ? Color.accentColor : Color.secondary))
                 Text(text)
+                    .fontWeight(current ? .semibold : .regular)
                     .foregroundStyle(done ? Color.secondary : Color.primary)
                     .strikethrough(done, color: Color.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -324,6 +424,7 @@ struct RowCheck: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .listRowBackground(current ? Color.accentColor.opacity(0.15) : nil)
     }
 }
 
