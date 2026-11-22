@@ -434,39 +434,50 @@ struct PatternEditor: View {
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
     @State var pattern: UserPattern
+    /// The pattern as read so far, for the live 3D preview (updated shortly after you stop typing).
+    @State private var pieces: [PatternToShape.Piece] = []
+    @State private var showPreview = true
+    @State private var flip: Bool?
+    @State private var color1 = Color(red: 0.55, green: 0.85, blue: 0.80)
+    @State private var color2 = Color(red: 0.78, green: 0.72, blue: 0.62)
 
     var body: some View {
         NavigationStack {
-            Form {
-                SwiftUI.Section {
-                    TextField("Name", text: $pattern.title)
-                    Picker("Craft", selection: $pattern.craft) {
-                        ForEach(Craft.allCases) { Text($0.rawValue).tag($0) }
+            GeometryReader { geo in
+                if geo.size.width > 700 {
+                    // iPad / landscape: the pattern and its shape side by side.
+                    HStack(spacing: 0) {
+                        form
+                        Divider()
+                        preview.frame(width: geo.size.width * 0.45)
                     }
-                    Picker("Video", selection: $pattern.videoID) {
-                        Text("None").tag(String?.none)
-                        ForEach(store.recentVideos) { video in
-                            Text(video.displayTitle).lineLimit(1).tag(String?.some(video.id))
+                } else {
+                    VStack(spacing: 0) {
+                        if showPreview {
+                            preview.frame(height: min(280, geo.size.height * 0.38))
+                            Divider()
                         }
+                        form
                     }
-                }
-                SwiftUI.Section {
-                    TextEditor(text: $pattern.body)
-                        .frame(minHeight: 220)
-                        .font(.body.monospaced())
-                } header: {
-                    Text("Rows")
-                } footer: {
-                    Text("One row or step per line. Paste a whole pattern here; you'll tick each line off as you work it.")
-                }
-                SwiftUI.Section("Notes") {
-                    TextEditor(text: $pattern.notes).frame(minHeight: 80)
                 }
             }
             .navigationTitle(pattern.title.isEmpty ? "New pattern" : pattern.title)
             .navigationBarTitleDisplayMode(.inline)
+            .task(id: pattern.body) {
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                guard !Task.isCancelled else { return }
+                let lines = pattern.body.split(separator: "\n").map(String.init)
+                pieces = PatternToShape.pieces(from: lines)
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .principal) {
+                    Button { withAnimation { showPreview.toggle() } } label: {
+                        Label(showPreview ? "Hide 3D" : "Show 3D", systemImage: "cube.transparent")
+                            .labelStyle(.titleAndIcon)
+                            .font(.subheadline)
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         if pattern.title.trimmingCharacters(in: .whitespaces).isEmpty { pattern.title = "My pattern" }
@@ -480,5 +491,75 @@ struct PatternEditor: View {
                 }
             }
         }
+    }
+
+    private var form: some View {
+        Form {
+            SwiftUI.Section {
+                TextField("Name", text: $pattern.title)
+                Picker("Craft", selection: $pattern.craft) {
+                    ForEach(Craft.allCases) { Text($0.rawValue).tag($0) }
+                }
+                Picker("Video", selection: $pattern.videoID) {
+                    Text("None").tag(String?.none)
+                    ForEach(store.recentVideos) { video in
+                        Text(video.displayTitle).lineLimit(1).tag(String?.some(video.id))
+                    }
+                }
+            }
+            SwiftUI.Section {
+                TextEditor(text: $pattern.body)
+                    .frame(minHeight: 260)
+                    .font(.body.monospaced())
+            } header: {
+                Text("Rows")
+            } footer: {
+                Text("One row or step per line, e.g. \"3. Sc, inc (18)\". Headings like \"Ears x2\" start a new piece; \"Color change\", \"Sew on ears between rounds 4 & 6 of head\" and \"Safety eyes between 6 & 7\" show up in the 3D preview.")
+            }
+            SwiftUI.Section("Notes") {
+                TextEditor(text: $pattern.notes).frame(minHeight: 80)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        let assembly = Assembly.build(pieces: pieces, gauge: Gauge(), flip: flip)
+        ZStack(alignment: .bottom) {
+            if assembly.parts.isEmpty {
+                Color(.secondarySystemBackground)
+                VStack(spacing: 6) {
+                    Image(systemName: "cube.transparent").font(.title)
+                    Text("Type rounds with their stitch counts, like \"1. 6 sc in MR (6)\", and the piece takes shape here.")
+                        .font(.footnote)
+                        .multilineTextAlignment(.center)
+                }
+                .foregroundStyle(.secondary)
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                AssemblySceneView(assembly: assembly, palette: [UIColor(color1), UIColor(color2), .white])
+                HStack(spacing: 8) {
+                    ColorPicker("", selection: $color1, supportsOpacity: false).labelsHidden()
+                    if assembly.colorCount > 1 {
+                        ColorPicker("", selection: $color2, supportsOpacity: false).labelsHidden()
+                    }
+                    Text(summary(assembly)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer()
+                    Button { flip = !assembly.mainTopDown } label: {
+                        Label("Flip", systemImage: "arrow.up.arrow.down").font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(8)
+                .background(.ultraThinMaterial)
+            }
+        }
+    }
+
+    private func summary(_ assembly: Assembly) -> String {
+        let names = pieces.map { $0.repeatCount > 1 ? "\($0.name)" : $0.name }
+        return names.joined(separator: " · ") + " · experimental"
     }
 }

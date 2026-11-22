@@ -1,10 +1,15 @@
 import Foundation
-import simd
+
+@inline(__always) func distance(_ a: SIMD2<Double>, _ b: SIMD2<Double>) -> Double {
+    let d = a - b
+    return (d.x * d.x + d.y * d.y).squareRoot()
+}
 
 /// Crochet gauge: how big one single crochet is.
 struct Gauge: Equatable {
     var stitchesPer10cm: Double = 20
-    var roundsPer10cm: Double = 20
+    /// Crochet rounds are a little shorter than a stitch is wide.
+    var roundsPer10cm: Double = 24
     /// Width of one stitch, cm.
     var w: Double { 10 / max(stitchesPer10cm, 1) }
     /// Height of one round, cm.
@@ -20,14 +25,14 @@ struct Profile: Equatable {
     var maxRadius: Double { points.map(\.x).max() ?? 0 }
 
     var length: Double {
-        zip(points, points.dropFirst()).reduce(0) { $0 + simd_distance($1.0, $1.1) }
+        zip(points, points.dropFirst()).reduce(0) { $0 + distance($1.0, $1.1) }
     }
 
     /// Radius at arc length `s` from the bottom pole.
     func radius(at s: Double) -> Double {
         var walked = 0.0
         for (a, b) in zip(points, points.dropFirst()) {
-            let d = simd_distance(a, b)
+            let d = distance(a, b)
             if walked + d >= s, d > 0 {
                 let t = (s - walked) / d
                 return a.x + (b.x - a.x) * t
@@ -181,6 +186,10 @@ enum PatternToShape {
         var attach: Attach?
         /// Started at the top (e.g. a head begun at the crown): drawn magic ring up.
         var topDown = false
+        /// "Safety eyes between 6 & 7, 3 st apart".
+        var eyes: Eyes?
+
+        struct Eyes: Equatable { var rounds: ClosedRange<Int>; var apart: Int }
 
         struct Collar: Equatable { var round: Int; var count: Int? }
         struct Attach: Equatable { var target: Int; var rounds: ClosedRange<Int> }
@@ -213,6 +222,8 @@ enum PatternToShape {
     private static let frontLoopsOf = regex(#"front\s+loops?\s+(?:from|of|in|on)\s+(?:the\s+)?(?:rounds?|rnds?|rows?|r)\s*(\d+)"#)
     private static let aroundCount = regex(#"(?:sc\s*(\d+)|(\d+)\s*(?:sc|sts|stitches))"#)
     private static let sewBetween = regex(#"\b(?:sew|attach|pin)\b.*?(?:rounds?|rnds?|rows?|r)\s*(\d+)\s*(?:&|and|-|–|to)\s*(?:rounds?|rnds?|rows?|r)?\s*(\d+)"#)
+    private static let eyesBetween = regex(#"\beyes?\b.*?between\s*(?:rounds?|rnds?|rows?|r)?\s*(\d+)\s*(?:&|and|-|–|to)\s*(?:rounds?|rnds?|rows?|r)?\s*(\d+)"#)
+    private static let stitchesApart = regex(#"(\d+)\s*(?:st|sts|stitch|stitches)\s*apart"#)
     private static let tallStitch: [(NSRegularExpression, Double)] = [
         (regex(#"\btr\b"#), 2.6), (regex(#"\bdc\b"#), 2.0), (regex(#"\bhdc\b"#), 1.4),
     ]
@@ -240,7 +251,19 @@ enum PatternToShape {
             out.append(current)
         }
 
+        func readEyes(_ line: String) {
+            let ns = line as NSString
+            let range = NSRange(location: 0, length: ns.length)
+            guard let e = eyesBetween.firstMatch(in: line, range: range) else { return }
+            let a = Int(ns.substring(with: e.range(at: 1))) ?? 0
+            let b = Int(ns.substring(with: e.range(at: 2))) ?? a
+            var apart = 6
+            if let s = stitchesApart.firstMatch(in: line, range: range) { apart = Int(ns.substring(with: s.range(at: 1))) ?? 6 }
+            if a > 0 { current.eyes = .init(rounds: min(a, b)...max(a, b), apart: apart) }
+        }
+
         for line in split(rows) {
+            readEyes(line)
             let ns = line as NSString
             let range = NSRange(location: 0, length: ns.length)
             guard let m = label.firstMatch(in: line, range: range) ?? numbered.firstMatch(in: line, range: range) else {
@@ -395,32 +418,91 @@ struct StitchModel: Equatable {
     /// surface, so increases flatten it out and decreases pull it in, like real fabric.
     static func from(counts: [Int], gauge: Gauge, heights: [Double] = [], colors: [Int] = [],
                      collars: [PatternToShape.Piece.Collar] = [], puff: Double = 0) -> StitchModel {
+        let n = counts.count
+        guard n > 0 else { return StitchModel(bands: []) }
+        let radius = counts.map { Double($0) * gauge.w / (2 * Double.pi) }
+        let rowH = (0..<n).map { gauge.h * ($0 < heights.count ? heights[$0] : 1) }
+        let closed = counts[n - 1] <= 12
+
+        // Flat fabric: each round adds one row height along the surface, so increases lie flat
+        // and straight rounds go straight up. z[i] = height of round i's top edge.
+        var z = [Double](repeating: 0, count: n)
+        var prevR = 0.0, prevZ = 0.0
+        for i in 0..<n {
+            let dr = radius[i] - prevR
+            let ds = max(rowH[i], abs(dr))
+            let dz = max(sqrt(max(0, ds * ds - dr * dr)), puff * rowH[i] * 0.5)
+            z[i] = prevZ + dz
+            prevR = radius[i]; prevZ = z[i]
+        }
+        var capZ = prevZ + gauge.h * 0.3
+
+        // Stuffed: the increases at the start and the decreases at the end round out into domes
+        // instead of lying flat.
+        if puff > 0 {
+            // The opening dome runs up to the first widest round (rounds may repeat on the way: 6, 6, 9, 12).
+            var k = 0
+            while k + 1 < n && counts[k + 1] >= counts[k] && counts[k] < (counts.max() ?? 0) { k += 1 }
+            var m = n - 1
+            while m - 1 >= 0 && counts[m - 1] > counts[m] { m -= 1 }
+            if m < k { m = k }
+            if k >= 1 {
+                let R = radius[k]
+                let D = rowH[0...k].reduce(0, +) * 0.85
+                for i in 0...k {
+                    let t = min(1, radius[i] / R)
+                    z[i] = D * (1 - (1 - t * t).squareRoot())
+                }
+                // Keep the rounds after the dome where they were relative to it.
+                var last = z[k]
+                for i in (k + 1)..<max(k + 1, m + 1) where i < n {
+                    let dr = radius[i] - radius[i - 1]
+                    let ds = max(rowH[i], abs(dr))
+                    last += max(sqrt(max(0, ds * ds - dr * dr)), puff * rowH[i] * 0.5)
+                    z[i] = last
+                }
+            }
+            if closed && m < n - 1 {
+                let R2 = radius[m]
+                let D2 = (rowH[(m + 1)..<n].reduce(0, +) + gauge.h * 0.3) * 0.85
+                for i in (m + 1)..<n {
+                    let t = min(1, radius[i] / R2)
+                    z[i] = z[m] + D2 * (1 - t * t).squareRoot()
+                }
+                capZ = z[m] + D2
+            } else if closed {
+                capZ = z[n - 1] + gauge.h * 0.3
+            }
+        }
+
+        // Stuffing also squashes a piece a little: wider than its rounds alone would say, less tall.
+        if puff > 0 {
+            let squash = 1 - 0.4 * min(1, puff)
+            for i in 0..<n { z[i] *= squash }
+            capZ *= squash
+        }
+
         var bands: [Band] = []
         var bandColors: [Int] = []
         var p = SIMD2<Double>(0, 0)
-        for (i, c) in counts.enumerated() {
-            let r = Double(c) * gauge.w / (2 * Double.pi)
-            let h = gauge.h * (i < heights.count ? heights[i] : 1)
-            let dr = r - p.x
-            let ds = max(h, abs(dr))
-            // `puff`: stuffing pushes increase/decrease rounds out of flat into a dome.
-            let dz = max(sqrt(max(0, ds * ds - dr * dr)), puff * h)
-            let next = SIMD2(r, p.y + dz)
-            bands.append(Band(bottom: p, top: next, stitches: c))
+        for i in 0..<n {
+            let next = SIMD2(radius[i], z[i])
+            bands.append(Band(bottom: p, top: next, stitches: counts[i]))
             bandColors.append(i < colors.count ? colors[i] : 0)
             p = next
         }
         var model = StitchModel(bands: bands, bandColors: bandColors)
         model.roundCount = bands.count
-        if let last = counts.last, last <= 12 {
-            model.bands.append(Band(bottom: p, top: SIMD2(0, p.y + gauge.h * 0.3), stitches: last))
+        if closed {
+            model.bands.append(Band(bottom: p, top: SIMD2(0, capZ), stitches: counts[n - 1]))
             model.bandColors.append(bandColors.last ?? 0)
             model.closedTop = true
         }
-        // A collar: one round in the front loops of a round, flaring out back toward the start.
+        // A collar: one round in the front loops of a round, rising back toward the start and
+        // flaring a little, like a cup around the round before.
         for collar in collars where collar.round >= 1 && collar.round <= bands.count {
             let edge = bands[collar.round - 1].top
-            let tip = SIMD2(edge.x + gauge.h * 0.85, max(0, edge.y - gauge.h * 0.55))
+            let tip = SIMD2(edge.x + gauge.h * 0.8, max(0, edge.y - gauge.h * 1.3))
             model.bands.append(Band(bottom: edge, top: tip, stitches: collar.count ?? counts[collar.round - 1]))
             model.bandColors.append(bandColors[collar.round - 1])
         }

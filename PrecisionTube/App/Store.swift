@@ -30,13 +30,6 @@ struct StitchCounter: Codable, Identifiable, Hashable {
     var target: Int?
 }
 
-enum Craft: String, Codable, CaseIterable, Identifiable {
-    case crochet = "Crochet"
-    case knitting = "Knitting"
-    case other = "Other"
-    var id: String { rawValue }
-}
-
 struct UserPattern: Codable, Identifiable, Hashable {
     var id = UUID()
     var title: String

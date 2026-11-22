@@ -1,16 +1,16 @@
-import SceneKit
-import SwiftUI
-import UIKit
-import simd
+import Foundation
 
 /// A whole amigurumi put together: the biggest piece in the middle, pieces that are sewn on
 /// ("Sew on ears between rounds 4 & 6 of head") placed there, the rest set beside it.
 struct Assembly: Equatable {
     struct Part: Equatable {
         var model: StitchModel
-        var transform: simd_float4x4
+        var transform: Mat4
     }
     var parts: [Part]
+    /// Safety eyes.
+    var eyes: [Eye] = []
+    struct Eye: Equatable { var center: SIMD3<Float>; var radius: Float }
     /// How many yarn colours the pattern uses.
     var colorCount: Int
     /// Whether the main piece is drawn magic ring up.
@@ -30,7 +30,7 @@ struct Assembly: Equatable {
 
         var parts: [Part] = []
         // Magic ring up: turn it over (rotate half a turn about x) and lift it back above the floor.
-        let mainTransform = topDown ? translation(0, H, 0) * rotation(.pi, axis: SIMD3(1, 0, 0)) : matrix_identity_float4x4
+        let mainTransform = topDown ? translation(0, H, 0) * rotation(.pi, axis: SIMD3(1, 0, 0)) : Mat4.identity
         parts.append(Part(model: mainModel, transform: mainTransform))
 
         /// Where round n of the main piece is: (radius, height above the floor).
@@ -50,12 +50,17 @@ struct Assembly: Equatable {
                 let a = surface(attach.rounds.lowerBound), b = surface(attach.rounds.upperBound)
                 let r = max(a.r, b.r) * 0.85
                 let y = (a.y + b.y) / 2
-                // Small sewn-on pieces aren't stuffed: flatten them.
-                let flat = scale(1, 1, 0.35)
+                // Small sewn-on pieces aren't stuffed: pressed flat, a tube is as wide as half its
+                // circumference (π/2 × its round width) and thin.
+                let flat = scale(1.45, 1, 0.25)
                 if copies >= 2 {
-                    // A pair, one on each side, magic-ring end pointing out.
-                    parts.append(Part(model: model, transform: translation(r + h, y, 0) * rotation(.pi / 2, axis: SIMD3(0, 0, 1)) * flat))
-                    parts.append(Part(model: model, transform: translation(-(r + h), y, 0) * rotation(-.pi / 2, axis: SIMD3(0, 0, 1)) * flat))
+                    // A pair, one on each side. A flattened piece is sewn on along its edge, so its
+                    // flat width sticks out sideways (tilted up a little) and its rounds run up and down.
+                    let tilt: Float = 0.25
+                    let halfWidth = Float(model.maxRadius) * 1.45
+                    let out = r + halfWidth * 0.8
+                    parts.append(Part(model: model, transform: translation(out, y - h / 2, 0) * rotation(tilt, axis: SIMD3(0, 0, 1)) * flat))
+                    parts.append(Part(model: model, transform: translation(-out, y - h / 2, 0) * rotation(-tilt, axis: SIMD3(0, 0, 1)) * flat))
                 } else {
                     parts.append(Part(model: model, transform: translation(0, y, r + h) * rotation(-.pi / 2, axis: SIMD3(1, 0, 0))))
                 }
@@ -69,86 +74,24 @@ struct Assembly: Equatable {
                 }
             }
         }
-        let colors = (pieces.flatMap(\.colors).max() ?? 0) + 1
-        return Assembly(parts: parts, colorCount: colors, mainTopDown: topDown)
-    }
-
-    private static func translation(_ x: Float, _ y: Float, _ z: Float) -> simd_float4x4 {
-        var m = matrix_identity_float4x4
-        m.columns.3 = SIMD4(x, y, z, 1)
-        return m
-    }
-    private static func rotation(_ angle: Float, axis: SIMD3<Float>) -> simd_float4x4 {
-        simd_float4x4(simd_quatf(angle: angle, axis: axis))
-    }
-    private static func scale(_ x: Float, _ y: Float, _ z: Float) -> simd_float4x4 {
-        simd_float4x4(diagonal: SIMD4(x, y, z, 1))
-    }
-}
-
-/// 3D view of a whole assembly, each round in its yarn colour.
-struct AssemblySceneView: UIViewRepresentable {
-    var assembly: Assembly
-    var palette: [UIColor]
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIView(context: Context) -> SCNView {
-        let view = SCNView()
-        view.scene = SCNScene()
-        view.allowsCameraControl = true
-        view.autoenablesDefaultLighting = true
-        view.antialiasingMode = .multisampling4X
-        view.backgroundColor = .secondarySystemBackground
-        context.coordinator.rebuild(view, assembly: assembly, palette: palette)
-        return view
-    }
-
-    func updateUIView(_ view: SCNView, context: Context) {
-        let c = context.coordinator
-        guard c.assembly != assembly || c.palette != palette else { return }
-        c.rebuild(view, assembly: assembly, palette: palette)
-    }
-
-    final class Coordinator {
-        var assembly: Assembly?
-        var palette: [UIColor] = []
-        private let root = SCNNode()
-        private let cameraNode = SCNNode()
-        private var installed = false
-
-        func rebuild(_ view: SCNView, assembly: Assembly, palette: [UIColor]) {
-            let reframe = self.assembly?.parts.count != assembly.parts.count || self.assembly?.mainTopDown != assembly.mainTopDown
-                || self.assembly == nil
-            self.assembly = assembly
-            self.palette = palette
-            guard let scene = view.scene else { return }
-            if !installed {
-                scene.rootNode.addChildNode(root)
-                cameraNode.camera = SCNCamera()
-                cameraNode.camera?.zNear = 0.05
-                cameraNode.camera?.zFar = 2000
-                scene.rootNode.addChildNode(cameraNode)
-                installed = true
-            }
-            root.childNodes.forEach { $0.removeFromParentNode() }
-            root.simdTransform = matrix_identity_float4x4
-            for part in assembly.parts {
-                let node = SCNNode(geometry: ShapeSceneView.Coordinator.stitchGeometry(part.model, palette: palette))
-                node.simdTransform = part.transform
-                root.addChildNode(node)
-            }
-            // Centre the whole thing.
-            let (lo, hi) = root.boundingBox
-            let center = SCNVector3((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, (lo.z + hi.z) / 2)
-            root.position = SCNVector3(-center.x, -center.y, -center.z)
-            if reframe || view.pointOfView == nil {
-                let size = max(hi.x - lo.x, hi.y - lo.y, hi.z - lo.z, 1)
-                cameraNode.position = SCNVector3(0, size * 0.25, size * 1.7)
-                cameraNode.look(at: SCNVector3(0, 0, 0))
-                view.pointOfView = cameraNode
-                view.defaultCameraController.target = SCNVector3(0, 0, 0)
+        // Safety eyes on the front of the main piece, the given number of stitches apart.
+        var eyes: [Eye] = []
+        if let e = pieces[main].eyes {
+            let a = surface(e.rounds.lowerBound), b = surface(e.rounds.upperBound)
+            let r = (a.r + b.r) / 2, y = (a.y + b.y) / 2
+            let w = Float(gauge.w)
+            let half = Float(e.apart + 1) / 2 * w
+            let angle = half / max(r, 0.1)
+            let size = w * 0.5
+            for side: Float in [-1, 1] {
+                eyes.append(Eye(center: SIMD3(side * r * sin(angle), y, r * cos(angle) + size * 0.3), radius: size))
             }
         }
+        let colors = (pieces.flatMap(\.colors).max() ?? 0) + 1
+        return Assembly(parts: parts, eyes: eyes, colorCount: colors, mainTopDown: topDown)
     }
+
+    private static func translation(_ x: Float, _ y: Float, _ z: Float) -> Mat4 { .translation(x, y, z) }
+    private static func rotation(_ angle: Float, axis: SIMD3<Float>) -> Mat4 { .rotation(angle, axis: axis) }
+    private static func scale(_ x: Float, _ y: Float, _ z: Float) -> Mat4 { .scale(x, y, z) }
 }
