@@ -67,9 +67,16 @@ struct ShapeSceneView: UIViewRepresentable {
         }
 
         static func stitchGeometry(_ model: StitchModel, yarn: UIColor) -> SCNGeometry {
-            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-            yarn.getRed(&r, green: &g, blue: &b, alpha: &a)
-            let base = SIMD3<Float>(Float(r), Float(g), Float(b))
+            stitchGeometry(model, palette: [yarn])
+        }
+
+        /// One patch per stitch; each round in its own colour from `palette` (by `model.bandColors`).
+        static func stitchGeometry(_ model: StitchModel, palette: [UIColor]) -> SCNGeometry {
+            let rgb: [SIMD3<Float>] = (palette.isEmpty ? [UIColor.systemPink] : palette).map { color in
+                var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                color.getRed(&r, green: &g, blue: &b, alpha: &a)
+                return SIMD3<Float>(Float(r), Float(g), Float(b))
+            }
 
             var positions: [SCNVector3] = []
             var normals: [SCNVector3] = []
@@ -83,6 +90,8 @@ struct ShapeSceneView: UIViewRepresentable {
                 let len = max(1e-6, (dr * dr + dz * dz).squareRoot())
                 let pn = SIMD2(dz / len, -dr / len)                     // outward profile normal
                 let roundShade: Float = i.isMultiple(of: 2) ? 1.0 : 0.86
+                let colorIndex = i < model.bandColors.count ? model.bandColors[i] : 0
+                let base = rgb[min(max(0, colorIndex), rgb.count - 1)]
                 for j in 0..<n {
                     let a0 = 2 * Double.pi * (Double(j) + offset) / Double(n)
                     let a1 = 2 * Double.pi * (Double(j) + 1 + offset) / Double(n)

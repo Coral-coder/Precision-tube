@@ -169,6 +169,21 @@ enum PatternToShape {
         var id: Int
         var name: String
         var counts: [Int]
+        /// Height of each round in single-crochet rows (hdc ≈ 1.4, dc ≈ 2).
+        var heights: [Double] = []
+        /// Yarn colour of each round: 0 = first colour, 1 = after the first colour change…
+        var colors: [Int] = []
+        /// "Ears x2" → made twice.
+        var repeatCount = 1
+        /// Rings worked into the front loops of a round ("collar").
+        var collars: [Collar] = []
+        /// Sewn onto another piece between these rounds of it.
+        var attach: Attach?
+        /// Started at the top (e.g. a head begun at the crown): drawn magic ring up.
+        var topDown = false
+
+        struct Collar: Equatable { var round: Int; var count: Int? }
+        struct Attach: Equatable { var target: Int; var rounds: ClosedRange<Int> }
     }
 
     private static func regex(_ p: String) -> NSRegularExpression {
@@ -195,41 +210,106 @@ enum PatternToShape {
 
     /// Every round-by-round piece in the pattern. Round numbers starting over (R1 again)
     /// begin a new piece, named after the short heading line above it ("HEAD", "Body:").
+    private static let frontLoopsOf = regex(#"front\s+loops?\s+(?:from|of|in|on)\s+(?:the\s+)?(?:rounds?|rnds?|rows?|r)\s*(\d+)"#)
+    private static let aroundCount = regex(#"(?:sc\s*(\d+)|(\d+)\s*(?:sc|sts|stitches))"#)
+    private static let sewBetween = regex(#"\b(?:sew|attach|pin)\b.*?(?:rounds?|rnds?|rows?|r)\s*(\d+)\s*(?:&|and|-|–|to)\s*(?:rounds?|rnds?|rows?|r)?\s*(\d+)"#)
+    private static let tallStitch: [(NSRegularExpression, Double)] = [
+        (regex(#"\btr\b"#), 2.6), (regex(#"\bdc\b"#), 2.0), (regex(#"\bhdc\b"#), 1.4),
+    ]
+
+    /// Every round-by-round piece in the pattern. Round numbers starting over (R1 again)
+    /// begin a new piece, named after the short heading line above it ("HEAD", "Body:").
+    /// Also reads colour changes, taller stitches, collars and where pieces are sewn on.
     static func pieces(from rows: [String]) -> [Piece] {
         var out: [Piece] = []
-        var current: [Int] = []
+        var current = Piece(id: 0, name: "", counts: [])
         var name: String?
         var lastNumber = 0
         var lastHeading: String?
+        var color = 0
+        var sewLines: [(text: String, rounds: ClosedRange<Int>)] = []
 
         func close() {
-            guard current.count >= 3, let first = current.first, first <= 24 else { return }
+            guard current.counts.count >= 3, let first = current.counts.first, first <= 24 else { return }
             var title = name ?? "Piece \(out.count + 1)"
             if out.contains(where: { $0.name == title }) { title += " \(out.count + 1)" }
-            out.append(Piece(id: out.count, name: title, counts: current))
+            current.id = out.count
+            current.name = title
+            current.repeatCount = max(1, PatternHeading.multiplier(in: title) ?? 1)
+            current.topDown = title.lowercased().contains("head")
+            out.append(current)
         }
 
         for line in split(rows) {
             let ns = line as NSString
             let range = NSRange(location: 0, length: ns.length)
             guard let m = label.firstMatch(in: line, range: range) ?? numbered.firstMatch(in: line, range: range) else {
+                let lower = line.lowercased()
+                if (lower.contains("color") || lower.contains("colour")),
+                   lower.contains("change") || lower.contains("switch") {
+                    color += 1
+                }
+                if let f = frontLoopsOf.firstMatch(in: line, range: range), !current.counts.isEmpty {
+                    let round = Int(ns.substring(with: f.range(at: 1))) ?? 0
+                    var count: Int?
+                    if let c = aroundCount.firstMatch(in: line, range: range) {
+                        let g = c.range(at: 1).location != NSNotFound ? c.range(at: 1) : c.range(at: 2)
+                        count = Int(ns.substring(with: g))
+                    }
+                    current.collars.append(.init(round: round, count: count))
+                }
+                if let sew = sewBetween.firstMatch(in: line, range: range) {
+                    let a = Int(ns.substring(with: sew.range(at: 1))) ?? 0
+                    let b = Int(ns.substring(with: sew.range(at: 2))) ?? a
+                    if a > 0 { sewLines.append((lower, min(a, b)...max(a, b))) }
+                }
                 let heading = line.trimmingCharacters(in: CharacterSet(charactersIn: " :-*#\t"))
                 if !heading.isEmpty, heading.count < 40 { lastHeading = heading }
                 continue
             }
             let a = Int(ns.substring(with: m.range(at: 1))) ?? 0
             let b = m.range(at: 2).location != NSNotFound ? (Int(ns.substring(with: m.range(at: 2))) ?? a) : a
-            if !current.isEmpty, a <= lastNumber {
+            if !current.counts.isEmpty, a <= lastNumber {
                 close()
-                current = []
+                current = Piece(id: 0, name: "", counts: [])
+                color = 0
             }
-            if current.isEmpty { name = lastHeading }
+            if current.counts.isEmpty { name = lastHeading }
             let rest = ns.substring(from: m.range.location + m.range.length)
-            guard let c = count(rest: rest, line: line, prev: current.last), c > 0, c < 2000 else { continue }
-            current.append(contentsOf: Array(repeating: c, count: max(1, min(200, b - a + 1))))
+            guard let c = count(rest: rest, line: line, prev: current.counts.last), c > 0, c < 2000 else { continue }
+            let times = max(1, min(200, b - a + 1))
+            let height = tallStitch.first { $0.0.firstMatch(in: line, range: range) != nil }?.1 ?? 1
+            current.counts.append(contentsOf: Array(repeating: c, count: times))
+            current.heights.append(contentsOf: Array(repeating: height, count: times))
+            current.colors.append(contentsOf: Array(repeating: color, count: times))
             lastNumber = max(a, b)
         }
         close()
+
+        // "Sew on ears between rounds 4 & 6 of head": the piece named in the line goes onto the
+        // biggest piece (or the one named after "of").
+        if let main = out.indices.max(by: { out[$0].counts.reduce(0, +) < out[$1].counts.reduce(0, +) }) {
+            for sew in sewLines {
+                func key(_ name: String) -> String {
+                    let word = name.lowercased().split(whereSeparator: { !$0.isLetter }).first.map(String.init) ?? ""
+                    return word.hasSuffix("s") ? String(word.dropLast()) : word
+                }
+                guard let source = out.indices.first(where: { $0 != main && !key(out[$0].name).isEmpty
+                                                              && sew.text.contains(key(out[$0].name)) }) else { continue }
+                var target = main
+                if let ofRange = sew.text.range(of: " of ") {
+                    let after = String(sew.text[ofRange.upperBound...])
+                    if let t = out.indices.first(where: { $0 != source && !key(out[$0].name).isEmpty && after.contains(key(out[$0].name)) }) {
+                        target = t
+                    }
+                    if after.contains("head") {
+                        out[target].topDown = true
+                        if out[target].name.hasPrefix("Piece ") { out[target].name = "Head" }
+                    }
+                }
+                out[source].attach = .init(target: target, rounds: sew.rounds)
+            }
+        }
         return out
     }
 
@@ -301,30 +381,47 @@ struct StitchModel: Equatable {
         var stitches: Int
     }
     var bands: [Band]
+    /// Colour index of each band (same order as bands); empty = all the first colour.
+    var bandColors: [Int] = []
 
     var height: Double { bands.map { max($0.top.y, $0.bottom.y) }.max() ?? 0 }
     var maxRadius: Double { bands.map { max($0.top.x, $0.bottom.x) }.max() ?? 0 }
-    var totalStitches: Int { bands.dropLast(closedTop ? 1 : 0).reduce(0) { $0 + $1.stitches } }
+    var totalStitches: Int { bands.prefix(roundCount).reduce(0) { $0 + $1.stitches } }
     var closedTop = false
+    /// Bands that are rounds (not the closing cap or collars).
+    var roundCount = 0
 
     /// Each round's circumference sets its radius; each round adds one row height along the
     /// surface, so increases flatten it out and decreases pull it in, like real fabric.
-    static func from(counts: [Int], gauge: Gauge) -> StitchModel {
+    static func from(counts: [Int], gauge: Gauge, heights: [Double] = [], colors: [Int] = [],
+                     collars: [PatternToShape.Piece.Collar] = []) -> StitchModel {
         var bands: [Band] = []
+        var bandColors: [Int] = []
         var p = SIMD2<Double>(0, 0)
-        for c in counts {
+        for (i, c) in counts.enumerated() {
             let r = Double(c) * gauge.w / (2 * Double.pi)
+            let h = gauge.h * (i < heights.count ? heights[i] : 1)
             let dr = r - p.x
-            let ds = max(gauge.h, abs(dr))
+            let ds = max(h, abs(dr))
             let dz = sqrt(max(0, ds * ds - dr * dr))
             let next = SIMD2(r, p.y + dz)
             bands.append(Band(bottom: p, top: next, stitches: c))
+            bandColors.append(i < colors.count ? colors[i] : 0)
             p = next
         }
-        var model = StitchModel(bands: bands)
-        if let last = counts.last, last <= 8 {
+        var model = StitchModel(bands: bands, bandColors: bandColors)
+        model.roundCount = bands.count
+        if let last = counts.last, last <= 12 {
             model.bands.append(Band(bottom: p, top: SIMD2(0, p.y + gauge.h * 0.3), stitches: last))
+            model.bandColors.append(bandColors.last ?? 0)
             model.closedTop = true
+        }
+        // A collar: one round in the front loops of a round, flaring out back toward the start.
+        for collar in collars where collar.round >= 1 && collar.round <= bands.count {
+            let edge = bands[collar.round - 1].top
+            let tip = SIMD2(edge.x + gauge.h * 0.85, max(0, edge.y - gauge.h * 0.55))
+            model.bands.append(Band(bottom: edge, top: tip, stitches: collar.count ?? counts[collar.round - 1]))
+            model.bandColors.append(bandColors[collar.round - 1])
         }
         return model
     }

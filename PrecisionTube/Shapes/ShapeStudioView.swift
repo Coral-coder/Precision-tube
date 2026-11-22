@@ -356,41 +356,67 @@ struct ShapeStudioView: View {
     }
 }
 
-/// The 3D preview for one pattern (from the pattern's page).
+/// The 3D preview for one pattern (from the pattern's page): the whole thing put together,
+/// or one piece at a time.
 struct PatternShapeView: View {
     let title: String
     let pieces: [PatternToShape.Piece]
-    @State private var pieceID = 0
+    /// -1 = everything together.
+    @State private var selection = -1
+    @State private var flip: Bool?
     @State private var gauge = Gauge()
-    @State private var yarn = Color(red: 0.93, green: 0.55, blue: 0.68)
+    @State private var yarn = Color(red: 0.55, green: 0.85, blue: 0.80)
+    @State private var yarn2 = Color(red: 0.78, green: 0.72, blue: 0.62)
+    @State private var yarn3 = Color(red: 0.95, green: 0.95, blue: 0.93)
 
     var body: some View {
-        let piece = pieces.first { $0.id == pieceID } ?? pieces[0]
-        let model = StitchModel.from(counts: piece.counts, gauge: gauge)
+        let shown = selection >= 0 && selection < pieces.count ? [pieces[selection]] : pieces
+        let assembly = Assembly.build(pieces: shown, gauge: gauge, flip: flip)
+        let main = assembly.parts.first?.model
         VStack(spacing: 0) {
-            ShapeSceneView(model: model, ghost: nil, yarn: UIColor(yarn))
+            ZStack(alignment: .bottomTrailing) {
+                AssemblySceneView(assembly: assembly, palette: [UIColor(yarn), UIColor(yarn2), UIColor(yarn3)])
+                Button {
+                    flip = !assembly.mainTopDown
+                } label: {
+                    Label("Flip", systemImage: "arrow.up.arrow.down")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                .padding(10)
+            }
             Form {
                 Label("Experimental preview: an estimate from your gauge.", systemImage: "flask")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if pieces.count > 1 {
-                    Picker("Piece", selection: $pieceID) {
+                    Picker("Show", selection: $selection) {
+                        Text("Everything").tag(-1)
                         ForEach(pieces) { Text($0.name).tag($0.id) }
                     }
                 }
-                LabeledContent("Rounds", value: "\(piece.counts.count)")
-                LabeledContent("Finished size", value: "about \(String(format: "%.1f", model.maxRadius * 2)) × \(String(format: "%.1f", model.height)) cm")
+                if let main {
+                    LabeledContent("Finished size", value: "about \(String(format: "%.1f", main.maxRadius * 2)) × \(String(format: "%.1f", main.height)) cm")
+                }
+                ColorPicker(assembly.colorCount > 1 ? "First colour" : "Yarn colour", selection: $yarn, supportsOpacity: false)
+                if assembly.colorCount > 1 {
+                    ColorPicker("After the colour change", selection: $yarn2, supportsOpacity: false)
+                }
+                if assembly.colorCount > 2 {
+                    ColorPicker("Third colour", selection: $yarn3, supportsOpacity: false)
+                }
                 Stepper(value: $gauge.stitchesPer10cm, in: 8...40) {
                     LabeledContent("Stitches per 10 cm", value: "\(Int(gauge.stitchesPer10cm))")
                 }
                 Stepper(value: $gauge.roundsPer10cm, in: 8...40) {
                     LabeledContent("Rounds per 10 cm", value: "\(Int(gauge.roundsPer10cm))")
                 }
-                ColorPicker("Yarn color", selection: $yarn, supportsOpacity: false)
             }
-            .frame(maxHeight: 320)
+            .frame(maxHeight: 340)
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: selection) { _, _ in flip = nil }
     }
 }
