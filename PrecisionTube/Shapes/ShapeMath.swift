@@ -394,7 +394,7 @@ struct StitchModel: Equatable {
     /// Each round's circumference sets its radius; each round adds one row height along the
     /// surface, so increases flatten it out and decreases pull it in, like real fabric.
     static func from(counts: [Int], gauge: Gauge, heights: [Double] = [], colors: [Int] = [],
-                     collars: [PatternToShape.Piece.Collar] = []) -> StitchModel {
+                     collars: [PatternToShape.Piece.Collar] = [], puff: Double = 0) -> StitchModel {
         var bands: [Band] = []
         var bandColors: [Int] = []
         var p = SIMD2<Double>(0, 0)
@@ -403,7 +403,8 @@ struct StitchModel: Equatable {
             let h = gauge.h * (i < heights.count ? heights[i] : 1)
             let dr = r - p.x
             let ds = max(h, abs(dr))
-            let dz = sqrt(max(0, ds * ds - dr * dr))
+            // `puff`: stuffing pushes increase/decrease rounds out of flat into a dome.
+            let dz = max(sqrt(max(0, ds * ds - dr * dr)), puff * h)
             let next = SIMD2(r, p.y + dz)
             bands.append(Band(bottom: p, top: next, stitches: c))
             bandColors.append(i < colors.count ? colors[i] : 0)

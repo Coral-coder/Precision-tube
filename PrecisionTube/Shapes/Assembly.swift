@@ -19,7 +19,9 @@ struct Assembly: Equatable {
     static func build(pieces: [PatternToShape.Piece], gauge: Gauge, flip: Bool? = nil) -> Assembly {
         guard !pieces.isEmpty else { return Assembly(parts: [], colorCount: 1, mainTopDown: false) }
         let models = pieces.map {
-            StitchModel.from(counts: $0.counts, gauge: gauge, heights: $0.heights, colors: $0.colors, collars: $0.collars)
+            // Stuffed pieces round out; sewn-on pieces (ears, arms) stay flatter.
+            StitchModel.from(counts: $0.counts, gauge: gauge, heights: $0.heights, colors: $0.colors,
+                             collars: $0.collars, puff: $0.attach == nil ? 0.6 : 0.3)
         }
         let main = pieces.indices.max { pieces[$0].counts.reduce(0, +) < pieces[$1].counts.reduce(0, +) } ?? 0
         let topDown = flip ?? pieces[main].topDown
