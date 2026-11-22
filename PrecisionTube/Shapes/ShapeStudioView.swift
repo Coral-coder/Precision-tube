@@ -29,7 +29,10 @@ struct ShapeStudioView: View {
 
     // Pattern
     @State private var patternID: String?
-    @State private var pieceID = 0
+    /// -1 = the whole pattern put together.
+    @State private var pieceID = -1
+    @State private var patternFlip: Bool?
+    @State private var yarn2 = Color(red: 0.78, green: 0.72, blue: 0.62)
 
     @State private var saved = false
 
@@ -43,7 +46,7 @@ struct ShapeStudioView: View {
     /// All of your patterns, plus the built-in ones that are written round by round.
     private var availablePatterns: [PatternContent] {
         store.patterns.map(\.content) + PatternLibrary.all.filter {
-            !PatternToShape.pieces(from: $0.sections.flatMap(\.rows)).isEmpty
+            !PatternToShape.pieces(from: $0.shapeLines).isEmpty
         }
     }
 
@@ -52,9 +55,17 @@ struct ShapeStudioView: View {
         return all.first { $0.id == patternID } ?? all.first
     }
 
+    /// The pattern (or the chosen piece) put together for the 3D preview.
+    private var patternAssembly: Assembly? {
+        let pieces = selectedPieces
+        guard !pieces.isEmpty else { return nil }
+        let shown = pieces.filter { pieceID < 0 || $0.id == pieceID }
+        return Assembly.build(pieces: shown.isEmpty ? pieces : shown, gauge: gauge, flip: patternFlip)
+    }
+
     private var selectedPieces: [PatternToShape.Piece] {
         guard let p = selectedPattern else { return [] }
-        return PatternToShape.pieces(from: p.sections.flatMap(\.rows))
+        return PatternToShape.pieces(from: p.shapeLines)
     }
 
     private var result: StudioResult? {
@@ -72,8 +83,9 @@ struct ShapeStudioView: View {
                           title: "\((fileName ?? "Model") as String) \(format(fileHeight)) cm")
         case .pattern:
             let pieces = selectedPieces
+            let main = pieces.max { $0.counts.reduce(0, +) < $1.counts.reduce(0, +) }
             guard let pattern = selectedPattern,
-                  let piece = pieces.first(where: { $0.id == pieceID }) ?? pieces.first else { return nil }
+                  let piece = pieces.first(where: { $0.id == pieceID }) ?? main else { return nil }
             return StudioResult(counts: piece.counts, rows: [], ghost: nil,
                                 title: pieces.count > 1 ? "\(pattern.title): \(piece.name)" : pattern.title)
         }
@@ -103,6 +115,7 @@ struct ShapeStudioView: View {
             if case .success(let url) = picked { load(url) }
         }
         .onChange(of: axis) { _, _ in reslice() }
+        .onChange(of: pieceID) { _, _ in patternFlip = nil }
     }
 
     static let modelTypes: [UTType] = {
@@ -116,7 +129,18 @@ struct ShapeStudioView: View {
     @ViewBuilder
     private func previewPane(model: StitchModel?, ghost: Profile?) -> some View {
         ZStack(alignment: .bottomLeading) {
-            if let model, !model.bands.isEmpty {
+            if source == .pattern, let assembly = patternAssembly, !assembly.parts.isEmpty {
+                AssemblySceneView(assembly: assembly, palette: [UIColor(yarn), UIColor(yarn2), UIColor(yarn).withAlphaComponent(1)])
+                    .overlay(alignment: .bottomTrailing) {
+                        Button { patternFlip = !assembly.mainTopDown } label: {
+                            Label("Flip", systemImage: "arrow.up.arrow.down")
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 10).padding(.vertical, 6)
+                                .background(.ultraThinMaterial, in: Capsule())
+                        }
+                        .padding(10)
+                    }
+            } else if let model, !model.bands.isEmpty {
                 ShapeSceneView(model: model, ghost: ghost, yarn: UIColor(yarn))
             } else {
                 Color(.secondarySystemBackground)
@@ -177,7 +201,11 @@ struct ShapeStudioView: View {
                 Stepper(value: $gauge.roundsPer10cm, in: 8...40, step: 1) {
                     LabeledContent("Rounds per 10 cm", value: format(gauge.roundsPer10cm))
                 }
-                ColorPicker("Yarn color", selection: $yarn, supportsOpacity: false)
+                ColorPicker(source == .pattern && (patternAssembly?.colorCount ?? 1) > 1 ? "First color" : "Yarn color",
+                            selection: $yarn, supportsOpacity: false)
+                if source == .pattern && (patternAssembly?.colorCount ?? 1) > 1 {
+                    ColorPicker("After the color change", selection: $yarn2, supportsOpacity: false)
+                }
                 if source != .pattern { Toggle("Show the target shape", isOn: $showGhost) }
             } header: {
                 Text("Your gauge (single crochet)")
@@ -273,7 +301,7 @@ struct ShapeStudioView: View {
             Text("No patterns yet. Save one in the Patterns tab.").foregroundStyle(.secondary)
         } else {
             Picker("Pattern", selection: Binding(get: { selectedPattern?.id ?? "" },
-                                                 set: { patternID = $0; pieceID = 0 })) {
+                                                 set: { patternID = $0; pieceID = -1; patternFlip = nil })) {
                 ForEach(availablePatterns) { p in
                     Text(p.title.isEmpty ? "Untitled" : p.title).tag(p.id)
                 }
@@ -281,6 +309,7 @@ struct ShapeStudioView: View {
             let pieces = selectedPieces
             if pieces.count > 1 {
                 Picker("Piece", selection: $pieceID) {
+                    Text("Everything").tag(-1)
                     ForEach(pieces) { Text("\($0.name) (\($0.counts.count) rounds)").tag($0.id) }
                 }
             } else if pieces.isEmpty {
@@ -356,41 +385,67 @@ struct ShapeStudioView: View {
     }
 }
 
-/// The 3D preview for one pattern (from the pattern's page).
+/// The 3D preview for one pattern (from the pattern's page): the whole thing put together,
+/// or one piece at a time.
 struct PatternShapeView: View {
     let title: String
     let pieces: [PatternToShape.Piece]
-    @State private var pieceID = 0
+    /// -1 = everything together.
+    @State private var selection = -1
+    @State private var flip: Bool?
     @State private var gauge = Gauge()
-    @State private var yarn = Color(red: 0.93, green: 0.55, blue: 0.68)
+    @State private var yarn = Color(red: 0.55, green: 0.85, blue: 0.80)
+    @State private var yarn2 = Color(red: 0.78, green: 0.72, blue: 0.62)
+    @State private var yarn3 = Color(red: 0.95, green: 0.95, blue: 0.93)
 
     var body: some View {
-        let piece = pieces.first { $0.id == pieceID } ?? pieces[0]
-        let model = StitchModel.from(counts: piece.counts, gauge: gauge)
+        let shown = selection >= 0 && selection < pieces.count ? [pieces[selection]] : pieces
+        let assembly = Assembly.build(pieces: shown, gauge: gauge, flip: flip)
+        let main = assembly.parts.first?.model
         VStack(spacing: 0) {
-            ShapeSceneView(model: model, ghost: nil, yarn: UIColor(yarn))
+            ZStack(alignment: .bottomTrailing) {
+                AssemblySceneView(assembly: assembly, palette: [UIColor(yarn), UIColor(yarn2), UIColor(yarn3)])
+                Button {
+                    flip = !assembly.mainTopDown
+                } label: {
+                    Label("Flip", systemImage: "arrow.up.arrow.down")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                .padding(10)
+            }
             Form {
                 Label("Experimental preview: an estimate from your gauge.", systemImage: "flask")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if pieces.count > 1 {
-                    Picker("Piece", selection: $pieceID) {
+                    Picker("Show", selection: $selection) {
+                        Text("Everything").tag(-1)
                         ForEach(pieces) { Text($0.name).tag($0.id) }
                     }
                 }
-                LabeledContent("Rounds", value: "\(piece.counts.count)")
-                LabeledContent("Finished size", value: "about \(String(format: "%.1f", model.maxRadius * 2)) × \(String(format: "%.1f", model.height)) cm")
+                if let main {
+                    LabeledContent("Finished size", value: "about \(String(format: "%.1f", main.maxRadius * 2)) × \(String(format: "%.1f", main.height)) cm")
+                }
+                ColorPicker(assembly.colorCount > 1 ? "First colour" : "Yarn colour", selection: $yarn, supportsOpacity: false)
+                if assembly.colorCount > 1 {
+                    ColorPicker("After the colour change", selection: $yarn2, supportsOpacity: false)
+                }
+                if assembly.colorCount > 2 {
+                    ColorPicker("Third colour", selection: $yarn3, supportsOpacity: false)
+                }
                 Stepper(value: $gauge.stitchesPer10cm, in: 8...40) {
                     LabeledContent("Stitches per 10 cm", value: "\(Int(gauge.stitchesPer10cm))")
                 }
                 Stepper(value: $gauge.roundsPer10cm, in: 8...40) {
                     LabeledContent("Rounds per 10 cm", value: "\(Int(gauge.roundsPer10cm))")
                 }
-                ColorPicker("Yarn color", selection: $yarn, supportsOpacity: false)
             }
-            .frame(maxHeight: 320)
+            .frame(maxHeight: 340)
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: selection) { _, _ in flip = nil }
     }
 }

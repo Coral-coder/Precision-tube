@@ -1,0 +1,8 @@
+Snake (green)
+1. 6 sc in MR (6)
+2. (sc, inc) x3 (9)
+3. (2 sc, inc) x3 (12)
+4-40. sc around (12)
+Safety eyes between rounds 4 and 5, 4 sts apart
+41. (2 sc, dec) x3 (9)
+42. (sc, dec) x3 (6)

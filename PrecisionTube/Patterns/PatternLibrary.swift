@@ -3,9 +3,13 @@ import Foundation
 struct PatternSection: Hashable {
     var title: String
     var rows: [String]
+    /// Stable IDs for remembering ticked rows. For your own patterns: the line's position in
+    /// the text you typed, so ticks stay put when headings are pulled out.
+    var ids: [Int]? = nil
+    /// "Ears x2" → 2.
+    var repeatCount: Int? = nil
 }
 
-/// A pattern ready to follow row by row: a built-in one or one you wrote.
 struct PatternContent: Identifiable, Hashable {
     var id: String
     var title: String
@@ -18,14 +22,41 @@ struct PatternContent: Identifiable, Hashable {
     var videoID: String?
     var videoSearch: String?
     var userPatternID: UUID?
+    /// The pattern's lines as typed, headings included (for reading it as a 3D shape).
+    var sourceLines: [String]? = nil
 
     var rowCount: Int { sections.reduce(0) { $0 + $1.rows.count } }
+    var shapeLines: [String] { sourceLines ?? sections.flatMap(\.rows) }
 }
 
 extension UserPattern {
+    /// Splits the typed pattern into sections at its headings ("Collar", "Ears x2"), so headings
+    /// aren't rows to tick. Row IDs are line positions in the text, as before headings existed.
     var content: PatternContent {
-        PatternContent(id: "user-\(id.uuidString)", title: title, craft: craft, notes: notes.isEmpty ? nil : notes,
-                       sections: [PatternSection(title: "Rows", rows: rows)], videoID: videoID, userPatternID: id)
+        let lines = rows
+        var sections: [PatternSection] = []
+        var current = PatternSection(title: "", rows: [], ids: [])
+        var headings: [String] = []
+        for (i, line) in lines.enumerated() {
+            if PatternHeading.isHeading(line) {
+                if !current.rows.isEmpty {
+                    sections.append(current)
+                    current = PatternSection(title: "", rows: [], ids: [])
+                    headings = []
+                }
+                headings.append(line.trimmingCharacters(in: CharacterSet(charactersIn: " :")))
+                current.title = headings.joined(separator: " · ")
+                current.repeatCount = PatternHeading.multiplier(in: current.title)
+                continue
+            }
+            current.rows.append(line)
+            current.ids?.append(i)
+        }
+        if !current.rows.isEmpty { sections.append(current) }
+        if sections.isEmpty { sections = [PatternSection(title: "Rows", rows: [], ids: [])] }
+        if sections[0].title.isEmpty { sections[0].title = sections.count == 1 ? "Rows" : "Start" }
+        return PatternContent(id: "user-\(id.uuidString)", title: title, craft: craft, notes: notes.isEmpty ? nil : notes,
+                              sections: sections, videoID: videoID, userPatternID: id, sourceLines: lines)
     }
 }
 

@@ -1,0 +1,18 @@
+Berry (red)
+Round 1: 4 sc in magic ring = 4
+Round 2: (sc, inc) twice = 6
+Round 3: (sc, inc) 3 times = 9
+Round 4: (2 sc, inc) 3 times = 12
+Round 5: (sc, inc) 6 times = 18
+Round 6: (2 sc, inc) 6 times = 24
+Round 7: (3 sc, inc) 6 times = 30
+Rounds 8-12: sc around = 30
+Round 13: (3 sc, dec) 6 times = 24
+Round 14: (2 sc, dec) 6 times = 18
+Round 15: (sc, dec) 6 times = 12
+Round 16: dec 6 times = 6
+Leaves (green)
+Round 1: 6 sc in magic ring = 6
+Round 2: inc in every stitch = 12
+Round 3: (sc, inc) 6 times = 18
+Sew the leaves on top of the berry.

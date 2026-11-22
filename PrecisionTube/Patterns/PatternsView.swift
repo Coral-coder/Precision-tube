@@ -197,6 +197,7 @@ struct PatternDetailView: View {
     @EnvironmentObject var app: AppState
     @State private var editing: UserPattern?
     @State private var confirmReset = false
+    @AppStorage("patternShow3D") private var show3D = true
 
     /// The latest version, if it's one of the user's own patterns that has been edited.
     private var current: PatternContent {
@@ -204,9 +205,48 @@ struct PatternDetailView: View {
         return pattern
     }
 
+    /// Every tickable row in order: (its ID for progress, its text).
+    private func orderedRows(_ p: PatternContent) -> [(id: Int, text: String)] {
+        var out: [(id: Int, text: String)] = []
+        var start = 0
+        for section in p.sections {
+            for (offset, row) in section.rows.enumerated() {
+                out.append((section.ids?[offset] ?? start + offset, row))
+            }
+            start += section.rows.count
+        }
+        return out
+    }
+
     var body: some View {
         let p = current
+        let rows = orderedRows(p)
+        let next = rows.first { !store.isDone(pattern: p.id, row: $0.id) }
+        let reading = PatternToShape.read(p.shapeLines)
+        ScrollViewReader { proxy in
         List {
+            if !reading.pieces.isEmpty {
+                SwiftUI.Section {
+                    if show3D {
+                        // What you've made so far (ticked rounds), the next round glowing, to hold
+                        // up against the real thing.
+                        PatternPreview3D(reading: reading,
+                                         lineVisible: { store.isDone(pattern: p.id, row: $0) },
+                                         highlightLine: next?.id,
+                                         emptyMessage: "Tick rounds as you make them and the piece builds up here.")
+                            .frame(height: 260)
+                            .listRowInsets(EdgeInsets())
+                    }
+                    progressCounters(p, reading: reading, next: next)
+                } header: {
+                    HStack {
+                        Text("Made so far")
+                        Spacer()
+                        Button(show3D ? "Hide 3D" : "Show 3D") { withAnimation { show3D.toggle() } }
+                            .font(.caption)
+                    }
+                }
+            }
             if p.summary != nil || !p.materials.isEmpty || p.notes != nil {
                 SwiftUI.Section {
                     if let summary = p.summary { Text(summary) }
@@ -223,13 +263,13 @@ struct PatternDetailView: View {
             }
 
             SwiftUI.Section {
-                counter(p)
+                if reading.pieces.isEmpty { counter(p) }
                 if let videoID = p.videoID {
                     Button { app.open(videoID: videoID, store: store) } label: {
                         Label("Watch the video", systemImage: "play.rectangle.fill")
                     }
                 }
-                let pieces = PatternToShape.pieces(from: p.sections.flatMap(\.rows))
+                let pieces = PatternToShape.pieces(from: p.shapeLines)
                 if !pieces.isEmpty {
                     NavigationLink {
                         PatternShapeView(title: p.title, pieces: pieces)
@@ -246,14 +286,38 @@ struct PatternDetailView: View {
 
             ForEach(Array(p.sections.enumerated()), id: \.offset) { _, section in
                 let start = rowStart(p, section: section)
-                SwiftUI.Section(section.title) {
+                SwiftUI.Section {
                     ForEach(Array(section.rows.enumerated()), id: \.offset) { offset, row in
-                        RowCheck(text: row, done: store.isDone(pattern: p.id, row: start + offset)) {
-                            store.toggle(pattern: p.id, row: start + offset)
+                        let rowID = section.ids?[offset] ?? start + offset
+                        RowCheck(text: row, done: store.isDone(pattern: p.id, row: rowID), current: rowID == next?.id) {
+                            store.toggle(pattern: p.id, row: rowID)
+                        }
+                        .id(rowID)
+                    }
+                } header: {
+                    HStack {
+                        Text(section.title)
+                        if let n = section.repeatCount, n > 1 {
+                            Text("Make \(n)")
+                                .font(.caption2.weight(.bold))
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.2), in: Capsule())
                         }
                     }
                 }
             }
+        }
+        .safeAreaInset(edge: .bottom) {
+            nextBar(p, rows: rows, next: next, proxy: proxy)
+        }
+        .onAppear {
+            // Open where you left off.
+            if let next, next.id != rows.first?.id {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    withAnimation { proxy.scrollTo(next.id, anchor: .center) }
+                }
+            }
+        }
         }
         .navigationTitle(p.title.isEmpty ? "Pattern" : p.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -271,6 +335,95 @@ struct PatternDetailView: View {
         .sheet(item: $editing) { PatternEditor(pattern: $0) }
     }
 
+    /// Where you are in the piece: which round is next and how many stitches it should have,
+    /// with the round counter, under the 3D.
+    @ViewBuilder
+    private func progressCounters(_ p: PatternContent, reading: PatternToShape.Reading,
+                                  next: (id: Int, text: String)?) -> some View {
+        if let next, let piece = reading.pieces.first(where: { $0.lines.contains(next.id) }),
+           let round = piece.lines.firstIndex(of: next.id) {
+            let doneRounds = piece.lines.prefix(round).count
+            let stitchesSoFar = piece.counts.prefix(round).reduce(0, +)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(piece.name).font(.headline)
+                    Text("round \(round + 1) of \(piece.counts.count)").font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(piece.counts[round]) st").font(.title2.monospacedDigit().weight(.bold))
+                }
+                HStack(spacing: 14) {
+                    Label("\(doneRounds) rounds done", systemImage: "checkmark.circle")
+                    Label("\(stitchesSoFar) stitches so far", systemImage: "number")
+                    if piece.repeatCount > 1 { Label("make \(piece.repeatCount)", systemImage: "square.on.square") }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
+        } else if next == nil {
+            Label("All done!", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+        }
+        counter(p)
+    }
+
+    /// The next row to do, with a big Done button, always on screen.
+    @ViewBuilder
+    private func nextBar(_ p: PatternContent, rows: [(id: Int, text: String)], next: (id: Int, text: String)?,
+                         proxy: ScrollViewProxy) -> some View {
+        if !rows.isEmpty {
+            HStack(spacing: 12) {
+                if let next {
+                    Button {
+                        withAnimation { proxy.scrollTo(next.id, anchor: .center) }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Next").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                            Text(next.text).font(.callout.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Label("All done!", systemImage: "checkmark.seal.fill")
+                        .font(.headline).foregroundStyle(.green)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                // Undo: un-tick the last ticked row before the next one.
+                if let last = lastDone(p, rows: rows, before: next?.id) {
+                    Button {
+                        store.toggle(pattern: p.id, row: last)
+                        withAnimation { proxy.scrollTo(last, anchor: .center) }
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward").frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Undo")
+                }
+                if let next {
+                    Button {
+                        store.toggle(pattern: p.id, row: next.id)
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        if let after = rows.drop(while: { $0.id != next.id }).dropFirst()
+                            .first(where: { !store.isDone(pattern: p.id, row: $0.id) }) {
+                            withAnimation { proxy.scrollTo(after.id, anchor: .center) }
+                        }
+                    } label: {
+                        Label("Done", systemImage: "checkmark").font(.headline).frame(height: 40)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.bar)
+        }
+    }
+
+    private func lastDone(_ p: PatternContent, rows: [(id: Int, text: String)], before nextID: Int?) -> Int? {
+        let upTo = nextID.flatMap { id in rows.firstIndex { $0.id == id } } ?? rows.count
+        return rows[..<upTo].last { store.isDone(pattern: p.id, row: $0.id) }?.id
+    }
+
     private func rowStart(_ p: PatternContent, section: PatternSection) -> Int {
         var n = 0
         for s in p.sections {
@@ -282,7 +435,7 @@ struct PatternDetailView: View {
 
     private func counter(_ p: PatternContent) -> some View {
         let value = store.patternCounters[p.id] ?? 0
-        let done = store.progress[p.id]?.count ?? 0
+        let done = orderedRows(p).filter { store.isDone(pattern: p.id, row: $0.id) }.count
         return HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Row counter").font(.subheadline.weight(.semibold))
@@ -308,15 +461,17 @@ struct PatternDetailView: View {
 struct RowCheck: View {
     let text: String
     let done: Bool
+    var current = false
     let toggle: () -> Void
 
     var body: some View {
         Button(action: toggle) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: done ? "checkmark.circle.fill" : "circle")
+                Image(systemName: done ? "checkmark.circle.fill" : (current ? "arrow.right.circle.fill" : "circle"))
                     .font(.title3)
-                    .foregroundStyle(done ? Color.green : Color.secondary)
+                    .foregroundStyle(done ? Color.green : (current ? Color.accentColor : Color.secondary))
                 Text(text)
+                    .fontWeight(current ? .semibold : .regular)
                     .foregroundStyle(done ? Color.secondary : Color.primary)
                     .strikethrough(done, color: Color.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -324,6 +479,7 @@ struct RowCheck: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .listRowBackground(current ? Color.accentColor.opacity(0.15) : nil)
     }
 }
 
@@ -333,39 +489,49 @@ struct PatternEditor: View {
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
     @State var pattern: UserPattern
+    /// The pattern as read so far (updated just after you stop typing).
+    @State private var reading = PatternToShape.Reading(pieces: [], colorNames: ["main"])
+    @State private var cursor = 0
+    @State private var showPreview = true
+    /// Show the whole pattern instead of following the cursor.
+    @State private var showAll = false
 
     var body: some View {
         NavigationStack {
-            Form {
-                SwiftUI.Section {
-                    TextField("Name", text: $pattern.title)
-                    Picker("Craft", selection: $pattern.craft) {
-                        ForEach(Craft.allCases) { Text($0.rawValue).tag($0) }
+            GeometryReader { geo in
+                if geo.size.width > 700 {
+                    // iPad / landscape: the pattern and its shape side by side.
+                    HStack(spacing: 0) {
+                        form
+                        Divider()
+                        preview.frame(width: geo.size.width * 0.45)
                     }
-                    Picker("Video", selection: $pattern.videoID) {
-                        Text("None").tag(String?.none)
-                        ForEach(store.recentVideos) { video in
-                            Text(video.displayTitle).lineLimit(1).tag(String?.some(video.id))
+                } else {
+                    VStack(spacing: 0) {
+                        if showPreview {
+                            preview.frame(height: min(300, geo.size.height * 0.4))
+                            Divider()
                         }
+                        form
                     }
-                }
-                SwiftUI.Section {
-                    TextEditor(text: $pattern.body)
-                        .frame(minHeight: 220)
-                        .font(.body.monospaced())
-                } header: {
-                    Text("Rows")
-                } footer: {
-                    Text("One row or step per line. Paste a whole pattern here; you'll tick each line off as you work it.")
-                }
-                SwiftUI.Section("Notes") {
-                    TextEditor(text: $pattern.notes).frame(minHeight: 80)
                 }
             }
             .navigationTitle(pattern.title.isEmpty ? "New pattern" : pattern.title)
             .navigationBarTitleDisplayMode(.inline)
+            .task(id: pattern.body) {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard !Task.isCancelled else { return }
+                reading = PatternToShape.read(pattern.rows)
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .principal) {
+                    Button { withAnimation { showPreview.toggle() } } label: {
+                        Label(showPreview ? "Hide 3D" : "Show 3D", systemImage: "cube.transparent")
+                            .labelStyle(.titleAndIcon)
+                            .font(.subheadline)
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         if pattern.title.trimmingCharacters(in: .whitespaces).isEmpty { pattern.title = "My pattern" }
@@ -379,5 +545,50 @@ struct PatternEditor: View {
                 }
             }
         }
+    }
+
+    private var form: some View {
+        Form {
+            SwiftUI.Section {
+                TextField("Name", text: $pattern.title)
+                Picker("Craft", selection: $pattern.craft) {
+                    ForEach(Craft.allCases) { Text($0.rawValue).tag($0) }
+                }
+                Picker("Video", selection: $pattern.videoID) {
+                    Text("None").tag(String?.none)
+                    ForEach(store.recentVideos) { video in
+                        Text(video.displayTitle).lineLimit(1).tag(String?.some(video.id))
+                    }
+                }
+            }
+            SwiftUI.Section {
+                PatternTextView(text: $pattern.body, cursor: $cursor)
+                    .frame(minHeight: 320)
+            } header: {
+                Text("Rows")
+            } footer: {
+                Text("One row or step per line, e.g. \"3. Sc, inc (18)\". The 3D crochets along as you write, up to the line you're on. Headings like \"Ears x2 (green)\" start a new piece; \"Change to white\", \"Safety eyes between 6 & 7\", \"Sew ears between rounds 4 & 6 of head\" and \"Sew the hat on top of the head\" all show up in 3D.")
+            }
+            SwiftUI.Section("Notes") {
+                TextEditor(text: $pattern.notes).frame(minHeight: 80)
+            }
+        }
+    }
+
+    private var preview: some View {
+        let position = PatternTextView.line(in: pattern.body, cursor: cursor)
+        let upTo = position.upTo
+        return PatternPreview3D(reading: reading,
+                                lineVisible: showAll ? nil : { $0 <= upTo },
+                                highlightLine: showAll ? nil : position.current)
+            .overlay(alignment: .topTrailing) {
+                Picker("Show", selection: $showAll) {
+                    Text("So far").tag(false)
+                    Text("All").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 140)
+                .padding(8)
+            }
     }
 }

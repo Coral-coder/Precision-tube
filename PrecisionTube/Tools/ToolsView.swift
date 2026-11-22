@@ -102,41 +102,6 @@ struct CountersSection: View {
 
 // MARK: - Increase / decrease evenly
 
-enum EvenlyCalculator {
-    /// Instructions to change `stitches` by `change` (positive: increase, negative: decrease),
-    /// spreading the shaping as evenly as possible.
-    static func instructions(stitches n: Int, change: Int, craft: Craft) -> String? {
-        guard n > 0, change != 0 else { return nil }
-        let k = abs(change)
-        let knit = craft == .knitting
-        let plain = knit ? "K" : "Sc"
-        func part(_ count: Int, _ shaping: String, times: Int) -> String? {
-            guard times > 0 else { return nil }
-            let body = count > 0 ? "\(plain) \(count), \(shaping)" : shaping
-            return times == 1 ? body : "*\(body)* \(times) times"
-        }
-        let base = n / k, extra = n % k
-        if change > 0 {
-            if knit {
-                // M1 makes a stitch without using one: groups of `base` (or base+1) knits, then M1.
-                guard k <= n else { return "That's more increases than stitches. Try a smaller number." }
-                return [part(base + 1, "M1", times: extra), part(base, "M1", times: k - extra)]
-                    .compactMap { $0 }.joined(separator: ", ")
-            }
-            guard k <= n else { return "That's more increases than stitches; work 2 or more stitches into some stitches instead." }
-            // "inc" works 2 stitches into 1 stitch, so each group is (base - 1) plain + 1 inc.
-            return [part(base, "inc", times: extra), part(base - 1, "inc", times: k - extra)]
-                .compactMap { $0 }.joined(separator: ", ")
-        } else {
-            let dec = knit ? "k2tog" : "dec"
-            guard 2 * k <= n else { return "You can decrease at most \(n / 2) stitches in one row." }
-            // A decrease uses 2 stitches: each group is (base - 2) plain + 1 dec.
-            return [part(base - 1, dec, times: extra), part(base - 2, dec, times: k - extra)]
-                .compactMap { $0 }.joined(separator: ", ")
-        }
-    }
-}
-
 struct IncreaseEvenlyView: View {
     @State private var stitches = 24
     @State private var change = 6

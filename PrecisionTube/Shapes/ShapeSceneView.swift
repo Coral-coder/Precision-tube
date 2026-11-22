@@ -67,46 +67,35 @@ struct ShapeSceneView: UIViewRepresentable {
         }
 
         static func stitchGeometry(_ model: StitchModel, yarn: UIColor) -> SCNGeometry {
-            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-            yarn.getRed(&r, green: &g, blue: &b, alpha: &a)
-            let base = SIMD3<Float>(Float(r), Float(g), Float(b))
+            stitchGeometry(model, palette: [yarn])
+        }
 
-            var positions: [SCNVector3] = []
-            var normals: [SCNVector3] = []
+        /// One patch per stitch; each round in its own colour from `palette` (by `model.bandColors`).
+        static func stitchGeometry(_ model: StitchModel, palette: [UIColor]) -> SCNGeometry {
+            let rgb: [SIMD3<Float>] = (palette.isEmpty ? [UIColor.systemPink] : palette).map { color in
+                var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                color.getRed(&r, green: &g, blue: &b, alpha: &a)
+                return SIMD3<Float>(Float(r), Float(g), Float(b))
+            }
+            let mesh = StitchMesh(model)
             var colors: [Float] = []
-            var indices: [UInt32] = []
-
-            for (i, band) in model.bands.enumerated() {
-                let n = max(3, band.stitches)
-                let offset = i.isMultiple(of: 2) ? 0.0 : 0.5           // spiral look
-                let dr = band.top.x - band.bottom.x, dz = band.top.y - band.bottom.y
-                let len = max(1e-6, (dr * dr + dz * dz).squareRoot())
-                let pn = SIMD2(dz / len, -dr / len)                     // outward profile normal
-                let roundShade: Float = i.isMultiple(of: 2) ? 1.0 : 0.86
-                for j in 0..<n {
-                    let a0 = 2 * Double.pi * (Double(j) + offset) / Double(n)
-                    let a1 = 2 * Double.pi * (Double(j) + 1 + offset) / Double(n)
-                    let am = (a0 + a1) / 2
-                    let start = UInt32(positions.count)
-                    for (rad, z, ang) in [(band.bottom.x, band.bottom.y, a0), (band.bottom.x, band.bottom.y, a1),
-                                          (band.top.x, band.top.y, a1), (band.top.x, band.top.y, a0)] {
-                        positions.append(SCNVector3(Float(rad * cos(ang)), Float(z), Float(rad * sin(ang))))
-                    }
-                    let normal = SCNVector3(Float(pn.x * cos(am)), Float(pn.y), Float(pn.x * sin(am)))
-                    normals.append(contentsOf: [normal, normal, normal, normal])
-                    let stitchShade: Float = j.isMultiple(of: 2) ? 1.0 : 0.92
-                    let c = base * roundShade * stitchShade
-                    for _ in 0..<4 { colors.append(contentsOf: [c.x, c.y, c.z, 1]) }
-                    indices.append(contentsOf: [start, start + 2, start + 1, start, start + 3, start + 2])
-                }
+            colors.reserveCapacity(mesh.positions.count * 4)
+            for (i, ci) in mesh.colorIndex.enumerated() {
+                // -1: black (eyes); -2: the round being written or worked next, glowing.
+                let yarn: SIMD3<Float> = ci == -2 ? SIMD3(1.0, 0.86, 0.30) : ci < 0 ? SIMD3(0.05, 0.05, 0.06)
+                    : rgb[min(ci, rgb.count - 1)]
+                let c = yarn * mesh.shade[i]
+                colors.append(contentsOf: [c.x, c.y, c.z, 1])
             }
             let colorData = colors.withUnsafeBufferPointer { Data(buffer: $0) }
             let colorSource = SCNGeometrySource(data: colorData, semantic: .color, vectorCount: colors.count / 4,
                                                 usesFloatComponents: true, componentsPerVector: 4,
                                                 bytesPerComponent: MemoryLayout<Float>.size, dataOffset: 0,
                                                 dataStride: MemoryLayout<Float>.size * 4)
+            let positions = mesh.positions.map { SCNVector3($0.x, $0.y, $0.z) }
+            let normals = mesh.normals.map { SCNVector3($0.x, $0.y, $0.z) }
             let geometry = SCNGeometry(sources: [SCNGeometrySource(vertices: positions), SCNGeometrySource(normals: normals), colorSource],
-                                       elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
+                                       elements: [SCNGeometryElement(indices: mesh.indices, primitiveType: .triangles)])
             let material = SCNMaterial()
             material.diffuse.contents = UIColor.white
             material.isDoubleSided = true

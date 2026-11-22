@@ -1,0 +1,25 @@
+Body (yellow)
+1. 6 sc in MR [6]
+2. 6 inc [12]
+3. (sc, inc) x6 [18]
+4. (2 sc, inc) x6 [24]
+5. (3 sc, inc) x6 [30]
+6. (4 sc, inc) x6 [36]
+7-14. sc around [36]
+Insert safety eyes between rounds 9 and 10, 5 stitches apart.
+15. (4 sc, dec) x6 [30]
+16. (3 sc, dec) x6 [24]
+17. (2 sc, dec) x6 [18]
+18. (sc, dec) x6 [12]
+19. 6 dec [6]
+Beak (orange)
+1. 4 sc in MR [4]
+2. (sc, inc) x2 [6]
+3. (2 sc, inc) x2 [8]
+Sew the beak between rounds 10 and 12 of the body.
+Wings (make 2) (yellow)
+1. 6 sc in MR [6]
+2. 6 inc [12]
+3-6. sc around [12]
+7. (2 sc, dec) x3 [9]
+Sew wings to the sides between rounds 11 and 14.
