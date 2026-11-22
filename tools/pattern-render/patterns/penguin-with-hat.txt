@@ -1,0 +1,32 @@
+Body (black)
+R1: 6 sc in MR (6)
+R2: inc x6 (12)
+R3: (sc, inc) x6 (18)
+R4: (2 sc, inc) x6 (24)
+R5: (3 sc, inc) x6 (30)
+R6-12: sc around (30)
+Safety eyes between rounds 8 & 9, 6 st apart
+R13: (3 sc, dec) x6 (24)
+Change to white
+R14-16: sc around (24)
+R17: (2 sc, dec) x6 (18)
+Stuff firmly.
+R18: (sc, dec) x6 (12)
+R19: dec x6 (6)
+Fasten off.
+Wings x2 (black)
+R1: 6 sc in MR (6)
+R2: (sc, inc) x3 (9)
+R3-6: sc around (9)
+Sew wings between rounds 10 & 12 of body
+Hat (red)
+R1: 6 sc in MR (6)
+R2: inc x6 (12)
+R3: (sc, inc) x6 (18)
+R4: (2 sc, inc) x6 (24)
+R5: (3 sc, inc) x6 (30)
+R6: (4 sc, inc) x6 (36)
+Change to white
+R7: BLO sc around (36)
+R8: sc around (36)
+Sew the hat on top of the body

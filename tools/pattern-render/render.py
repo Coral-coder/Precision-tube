@@ -11,7 +11,7 @@ from matplotlib.collections import PolyCollection
 data = json.load(open(sys.argv[1]))
 V = np.array(data["vertices"], dtype=float)
 T = np.array(data["triangles"], dtype=int)
-palette = [tuple(int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)) for h in (sys.argv[3:] or ["#8fd9cc", "#c7b89e", "#eeeeee"])]
+palette = [tuple(c) for c in data.get("palette", [])] or [(0.56, 0.85, 0.8), (0.78, 0.72, 0.62), (0.93, 0.93, 0.93)]
 
 def view(ax, yaw, pitch, title):
     P = V[:, :3]
@@ -30,7 +30,7 @@ def view(ax, yaw, pitch, title):
     for k in order:
         i = T[k, 0]
         ci = int(V[i, 3])
-        base = np.array((0.05, 0.05, 0.06) if ci < 0 else palette[min(ci, len(palette) - 1)])
+        base = np.array((1.0, 0.86, 0.30) if ci == -2 else (0.05, 0.05, 0.06) if ci < 0 else palette[min(ci, len(palette) - 1)])
         cols.append(np.clip(base * V[i, 4] * lam[k], 0, 1))
     pc = PolyCollection(tri[order][:, :, :2], facecolors=cols, edgecolors=cols, linewidths=0.2)
     ax.add_collection(pc)
@@ -40,7 +40,7 @@ def view(ax, yaw, pitch, title):
 
 fig, axes = plt.subplots(1, 3, figsize=(15, 5.5))
 view(axes[0], 0, 0, "front")
-view(axes[1], 0.6, -0.35, "three-quarter, from above")
+view(axes[1], 0.6, 0.45, "three-quarter, from above")
 view(axes[2], np.pi / 2, 0, "side")
 plt.tight_layout(); plt.savefig(sys.argv[2], dpi=90)
 print("saved", sys.argv[2])

@@ -16,16 +16,52 @@ struct Assembly: Equatable {
     /// Whether the main piece is drawn magic ring up.
     var mainTopDown: Bool
 
-    static func build(pieces: [PatternToShape.Piece], gauge: Gauge, flip: Bool? = nil) -> Assembly {
-        guard !pieces.isEmpty else { return Assembly(parts: [], colorCount: 1, mainTopDown: false) }
-        let models = pieces.map {
-            // Stuffed pieces round out; sewn-on pieces (ears, arms) stay flatter.
-            StitchModel.from(counts: $0.counts, gauge: gauge, heights: $0.heights, colors: $0.colors,
-                             collars: $0.collars, puff: $0.attach == nil ? 0.6 : 0.3)
+    /// - Parameters:
+    ///   - lineVisible: which pattern lines count as done (nil = all). Rounds show up to the first
+    ///     line that isn't; collars, eyes and sewing show once their line is.
+    ///   - highlightLine: the round(s) from this line glow (the one being written, or worked next)
+    ///     and are shown even if not done yet.
+    static func build(pieces allPieces: [PatternToShape.Piece], gauge: Gauge, flip: Bool? = nil,
+                      lineVisible: ((Int) -> Bool)? = nil, highlightLine: Int? = nil) -> Assembly {
+        let visible: (Int) -> Bool = { line in lineVisible?(line) ?? true || line == highlightLine }
+        // Only the rounds made so far.
+        var pieces: [PatternToShape.Piece] = []
+        var originalIndex: [Int] = []
+        for (i, var piece) in allPieces.enumerated() {
+            var n = 0
+            while n < piece.counts.count, n >= piece.lines.count || visible(piece.lines[n]) { n += 1 }
+            if lineVisible == nil && highlightLine == nil { n = piece.counts.count }
+            guard n > 0 else { continue }
+            if n < piece.counts.count {
+                piece.counts = Array(piece.counts.prefix(n))
+                piece.heights = Array(piece.heights.prefix(n))
+                piece.lines = Array(piece.lines.prefix(n))
+                // Not finished, so don't close it up.
+            }
+            var colors = Array(piece.colors.prefix(n))
+            if let h = highlightLine {
+                for r in 0..<min(n, piece.lines.count) where piece.lines[r] == h { colors[r] = -2 }
+            }
+            piece.colors = colors
+            piece.collars = piece.collars.filter { visible($0.line) && $0.round <= n }
+            if let a = piece.attach, !visible(a.line) { piece.attach = nil }
+            if let e = piece.eyes, n < e.rounds.lowerBound { piece.eyes = nil }
+            pieces.append(piece)
+            originalIndex.append(i)
         }
-        let main = pieces.indices.max { pieces[$0].counts.reduce(0, +) < pieces[$1].counts.reduce(0, +) } ?? 0
-        let topDown = flip ?? pieces[main].topDown
-        let mainModel = models[main]
+        guard !pieces.isEmpty else { return Assembly(parts: [], colorCount: 1, mainTopDown: false) }
+
+        let models = pieces.indices.map { k -> StitchModel in
+            let p = pieces[k]
+            // A piece still being made stays open; stuffed pieces round out, sewn-on ones stay flatter.
+            let complete = p.counts.count == allPieces[originalIndex[k]].counts.count
+            return StitchModel.from(counts: p.counts, gauge: gauge, heights: p.heights, colors: p.colors,
+                                    collars: p.collars, puff: p.attach == nil ? 0.6 : 0.3, closeEnd: complete)
+        }
+        let mainLocal = pieces.indices.max { pieces[$0].counts.reduce(0, +) < pieces[$1].counts.reduce(0, +) } ?? 0
+        let main = originalIndex[mainLocal]
+        let topDown = flip ?? pieces[mainLocal].topDown
+        let mainModel = models[mainLocal]
         let H = Float(mainModel.height)
 
         var parts: [Part] = []
@@ -42,30 +78,42 @@ struct Assembly: Equatable {
         }
 
         var besideX = Float(mainModel.maxRadius) * 1.5
-        for j in pieces.indices where j != main {
+        for j in pieces.indices where j != mainLocal {
             let model = models[j]
             let h = Float(model.height)
             let copies = max(1, pieces[j].repeatCount)
             if let attach = pieces[j].attach, attach.target == main {
-                let a = surface(attach.rounds.lowerBound), b = surface(attach.rounds.upperBound)
-                let r = max(a.r, b.r) * 0.85
-                let y = (a.y + b.y) / 2
-                // Small sewn-on pieces aren't stuffed: pressed flat, a tube is as wide as half its
-                // circumference (π/2 × its round width) and thin.
-                let flat = scale(1.45, 1, 0.25)
-                if copies >= 2 {
-                    // A pair, one on each side. A flattened piece is sewn on along its edge, so its
-                    // flat width sticks out sideways (tilted up a little) and its rounds run up and down.
-                    let tilt: Float = 0.25
-                    let halfWidth = Float(model.maxRadius) * 1.45
-                    let out = r + halfWidth * 0.8
-                    parts.append(Part(model: model, transform: translation(out, y - h / 2, 0) * rotation(tilt, axis: SIMD3(0, 0, 1)) * flat))
-                    parts.append(Part(model: model, transform: translation(-out, y - h / 2, 0) * rotation(-tilt, axis: SIMD3(0, 0, 1)) * flat))
-                } else {
-                    parts.append(Part(model: model, transform: translation(0, y, r + h) * rotation(-.pi / 2, axis: SIMD3(1, 0, 0))))
+                switch attach.place {
+                case .top, .bottom:
+                    // A hat or a base: worn over the top (magic ring up) or under the bottom.
+                    if attach.place == .top {
+                        let lift = Float(gauge.h) * 0.4
+                        parts.append(Part(model: model, transform: translation(0, H + lift, 0) * rotation(.pi, axis: SIMD3(1, 0, 0))))
+                    } else {
+                        parts.append(Part(model: model, transform: translation(0, -Float(gauge.h) * 0.4, 0)))
+                    }
+                case .between:
+                    let rounds = attach.rounds ?? (mainModel.roundCount / 2)...(mainModel.roundCount / 2)
+                    let a = surface(rounds.lowerBound), b = surface(rounds.upperBound)
+                    let r = max(a.r, b.r) * 0.85
+                    let y = (a.y + b.y) / 2
+                    // Small sewn-on pieces aren't stuffed: pressed flat, a tube is as wide as half its
+                    // circumference (π/2 × its round width) and thin.
+                    let flat = scale(1.45, 1, 0.25)
+                    if copies >= 2 {
+                        // A pair, one on each side. A flattened piece is sewn on along its edge, so its
+                        // flat width sticks out sideways (tilted up a little) and its rounds run up and down.
+                        let tilt: Float = 0.25
+                        let halfWidth = Float(model.maxRadius) * 1.45
+                        let out = r + halfWidth * 0.8
+                        parts.append(Part(model: model, transform: translation(out, y - h / 2, 0) * rotation(tilt, axis: SIMD3(0, 0, 1)) * flat))
+                        parts.append(Part(model: model, transform: translation(-out, y - h / 2, 0) * rotation(-tilt, axis: SIMD3(0, 0, 1)) * flat))
+                    } else {
+                        parts.append(Part(model: model, transform: translation(0, y, r + h) * rotation(-.pi / 2, axis: SIMD3(1, 0, 0))))
+                    }
                 }
             } else {
-                // Not sewn anywhere we can tell: stand it beside the main piece.
+                // Not sewn on (yet): stand it beside the main piece.
                 for _ in 0..<copies {
                     let radius = Float(model.maxRadius)
                     besideX += radius + 0.6
@@ -76,7 +124,7 @@ struct Assembly: Equatable {
         }
         // Safety eyes on the front of the main piece, the given number of stitches apart.
         var eyes: [Eye] = []
-        if let e = pieces[main].eyes {
+        if let e = pieces[mainLocal].eyes {
             let a = surface(e.rounds.lowerBound), b = surface(e.rounds.upperBound)
             let r = (a.r + b.r) / 2, y = (a.y + b.y) / 2
             let w = Float(gauge.w)
@@ -87,7 +135,7 @@ struct Assembly: Equatable {
                 eyes.append(Eye(center: SIMD3(side * r * sin(angle), y, r * cos(angle) + size * 0.3), radius: size))
             }
         }
-        let colors = (pieces.flatMap(\.colors).max() ?? 0) + 1
+        let colors = (allPieces.flatMap(\.colors).max() ?? 0) + 1
         return Assembly(parts: parts, eyes: eyes, colorCount: colors, mainTopDown: topDown)
     }
 

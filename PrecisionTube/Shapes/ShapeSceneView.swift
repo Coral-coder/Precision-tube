@@ -81,7 +81,10 @@ struct ShapeSceneView: UIViewRepresentable {
             var colors: [Float] = []
             colors.reserveCapacity(mesh.positions.count * 4)
             for (i, ci) in mesh.colorIndex.enumerated() {
-                let c = rgb[min(max(0, ci), rgb.count - 1)] * mesh.shade[i]
+                // -1: black (eyes); -2: the round being written or worked next, glowing.
+                let yarn: SIMD3<Float> = ci == -2 ? SIMD3(1.0, 0.86, 0.30) : ci < 0 ? SIMD3(0.05, 0.05, 0.06)
+                    : rgb[min(ci, rgb.count - 1)]
+                let c = yarn * mesh.shade[i]
                 colors.append(contentsOf: [c.x, c.y, c.z, 1])
             }
             let colorData = colors.withUnsafeBufferPointer { Data(buffer: $0) }

@@ -14,17 +14,23 @@ if args.count >= 5, let s = Double(args[3]), let r = Double(args[4]) {
     gauge.stitchesPer10cm = s; gauge.roundsPer10cm = r
 }
 let lines = text.split(separator: "\n").map(String.init)
-let pieces = PatternToShape.pieces(from: lines)
+let reading = PatternToShape.read(lines)
+let pieces = reading.pieces
+// UPTO=n: build only up to pattern line n (0-based), glowing that line, like the editor's cursor.
+let upTo = ProcessInfo.processInfo.environment["UPTO"].flatMap(Int.init)
+print("colours \(reading.colorNames)")
 for p in pieces {
     print("piece \(p.id) \"\(p.name)\" x\(p.repeatCount) topDown=\(p.topDown)")
     print("  counts  \(p.counts)")
     print("  heights \(p.heights)")
     print("  colors  \(p.colors)")
     if !p.collars.isEmpty { print("  collars \(p.collars)") }
-    if let a = p.attach { print("  attach to piece \(a.target) rounds \(a.rounds)") }
+    if let a = p.attach { print("  attach to piece \(a.target) \(a.place) rounds \(a.rounds.map { "\($0)" } ?? "-") (line \(a.line))") }
+    print("  lines   \(p.lines)")
     if let e = p.eyes { print("  eyes rounds \(e.rounds), \(e.apart) st apart") }
 }
-let assembly = Assembly.build(pieces: pieces, gauge: gauge)
+let assembly = upTo.map { n in Assembly.build(pieces: pieces, gauge: gauge, lineVisible: { $0 <= n }, highlightLine: n) }
+    ?? Assembly.build(pieces: pieces, gauge: gauge)
 print("parts \(assembly.parts.count), colours \(assembly.colorCount), main topDown \(assembly.mainTopDown)")
 
 var verts: [[Float]] = []
@@ -52,7 +58,8 @@ for eye in assembly.eyes {
     }
 }
 print("eyes \(assembly.eyes.count)")
-let json: [String: Any] = ["vertices": verts.map { $0.map(Double.init) }, "triangles": tris]
+let palette = YarnColor.palette(for: reading.colorNames).map { [$0.0, $0.1, $0.2] }
+let json: [String: Any] = ["vertices": verts.map { $0.map(Double.init) }, "triangles": tris, "palette": palette]
 let data = try! JSONSerialization.data(withJSONObject: json)
 try! data.write(to: URL(fileURLWithPath: args[2]))
 print("wrote \(verts.count) vertices, \(tris.count) triangles")

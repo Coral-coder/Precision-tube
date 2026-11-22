@@ -84,3 +84,58 @@ enum EvenlyCalculator {
     }
 }
 
+
+/// Yarn colour names a pattern might use, as RGB (0…1).
+enum YarnColor {
+    static let table: [(String, (Double, Double, Double))] = [
+        ("white", (0.96, 0.96, 0.94)), ("cream", (0.96, 0.92, 0.82)), ("ivory", (0.97, 0.95, 0.87)),
+        ("black", (0.10, 0.10, 0.11)), ("grey", (0.60, 0.60, 0.62)), ("gray", (0.60, 0.60, 0.62)),
+        ("silver", (0.75, 0.76, 0.78)), ("charcoal", (0.25, 0.25, 0.27)),
+        ("brown", (0.45, 0.30, 0.20)), ("tan", (0.78, 0.68, 0.52)), ("beige", (0.86, 0.80, 0.68)),
+        ("khaki", (0.74, 0.69, 0.52)), ("camel", (0.76, 0.60, 0.42)), ("chocolate", (0.36, 0.22, 0.14)),
+        ("green", (0.30, 0.65, 0.35)), ("mint", (0.60, 0.88, 0.78)), ("sage", (0.62, 0.71, 0.58)),
+        ("olive", (0.50, 0.50, 0.22)), ("teal", (0.15, 0.55, 0.56)), ("lime", (0.68, 0.85, 0.30)),
+        ("blue", (0.25, 0.45, 0.80)), ("navy", (0.12, 0.17, 0.38)), ("sky", (0.55, 0.78, 0.95)),
+        ("turquoise", (0.25, 0.80, 0.78)), ("aqua", (0.45, 0.85, 0.88)),
+        ("red", (0.82, 0.18, 0.18)), ("burgundy", (0.50, 0.10, 0.18)), ("pink", (0.95, 0.62, 0.72)),
+        ("rose", (0.90, 0.50, 0.60)), ("coral", (0.96, 0.50, 0.42)), ("peach", (0.98, 0.76, 0.62)),
+        ("orange", (0.95, 0.55, 0.15)), ("yellow", (0.98, 0.85, 0.25)), ("gold", (0.85, 0.68, 0.22)),
+        ("mustard", (0.82, 0.65, 0.18)), ("purple", (0.52, 0.32, 0.68)), ("lavender", (0.75, 0.68, 0.90)),
+        ("lilac", (0.78, 0.64, 0.86)), ("plum", (0.48, 0.22, 0.42)),
+    ]
+
+    /// The first colour word in a phrase ("light pink yarn" → "pink").
+    static func colorWord(in phrase: String) -> String? {
+        let words = phrase.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init)
+        return words.first { w in table.contains { $0.0 == w } }
+    }
+
+    /// RGB for a colour phrase, lightened or darkened by "light"/"dark"/"pale".
+    static func rgb(_ phrase: String) -> (Double, Double, Double)? {
+        guard let word = colorWord(in: phrase), let entry = table.first(where: { $0.0 == word }) else { return nil }
+        var (r, g, b) = entry.1
+        let lower = phrase.lowercased()
+        if lower.contains("light") || lower.contains("pale") || lower.contains("baby") {
+            r += (1 - r) * 0.45; g += (1 - g) * 0.45; b += (1 - b) * 0.45
+        } else if lower.contains("dark") || lower.contains("deep") {
+            r *= 0.6; g *= 0.6; b *= 0.6
+        }
+        return (r, g, b)
+    }
+
+    /// Colours for unnamed yarns ("main", "color 2", "body color"), in order.
+    static let defaults: [(Double, Double, Double)] = [
+        (0.55, 0.85, 0.80), (0.78, 0.72, 0.62), (0.96, 0.95, 0.92), (0.95, 0.65, 0.75),
+        (0.72, 0.68, 0.92), (0.98, 0.82, 0.45), (0.55, 0.72, 0.95),
+    ]
+
+    /// A colour for every yarn the pattern names.
+    static func palette(for names: [String]) -> [(Double, Double, Double)] {
+        var unnamed = 0
+        return names.map { name in
+            if let c = rgb(name) { return c }
+            defer { unnamed += 1 }
+            return defaults[unnamed % defaults.count]
+        }
+    }
+}

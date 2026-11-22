@@ -182,8 +182,10 @@ enum PatternToShape {
         var repeatCount = 1
         /// Rings worked into the front loops of a round ("collar").
         var collars: [Collar] = []
-        /// Sewn onto another piece between these rounds of it.
+        /// Sewn onto another piece (between rounds, or on top).
         var attach: Attach?
+        /// The pattern line each round came from (an index into the lines read).
+        var lines: [Int] = []
         /// Started at the top (e.g. a head begun at the crown): drawn magic ring up.
         var topDown = false
         /// "Safety eyes between 6 & 7, 3 st apart".
@@ -191,8 +193,15 @@ enum PatternToShape {
 
         struct Eyes: Equatable { var rounds: ClosedRange<Int>; var apart: Int }
 
-        struct Collar: Equatable { var round: Int; var count: Int? }
-        struct Attach: Equatable { var target: Int; var rounds: ClosedRange<Int> }
+        struct Collar: Equatable { var round: Int; var count: Int?; var line: Int = 0 }
+        struct Attach: Equatable {
+            var target: Int
+            var rounds: ClosedRange<Int>?
+            var place: Place = .between
+            /// The pattern line that says to sew it on.
+            var line: Int = 0
+            enum Place: Equatable { case between, top, bottom }
+        }
     }
 
     private static func regex(_ p: String) -> NSRegularExpression {
@@ -228,17 +237,59 @@ enum PatternToShape {
         (regex(#"\btr\b"#), 2.6), (regex(#"\bdc\b"#), 2.0), (regex(#"\bhdc\b"#), 1.4),
     ]
 
-    /// Every round-by-round piece in the pattern. Round numbers starting over (R1 again)
-    /// begin a new piece, named after the short heading line above it ("HEAD", "Body:").
-    /// Also reads colour changes, taller stitches, collars and where pieces are sewn on.
-    static func pieces(from rows: [String]) -> [Piece] {
+    /// Everything read from a pattern: its pieces and the yarn colours it names, in order of use.
+    struct Reading: Equatable {
+        var pieces: [Piece]
+        /// "main", "white", "body color", "color b"… (index = the colour numbers in `Piece.colors`).
+        var colorNames: [String]
+    }
+
+    /// Every round-by-round piece in the pattern.
+    static func pieces(from rows: [String]) -> [Piece] { read(rows).pieces }
+
+    private static let changeTo = regex(#"\b(?:change|switch)(?:\s+(?:yarn|colou?rs?))?\s+(?:back\s+)?(?:to|into)\s+([a-z][a-z ]{0,24}?)(?:\s+(?:yarn|colou?r))?\s*(?:[.,;:(!]|$|\s(?:and|then|for|in|on)\b)"#)
+    private static let joinColor = regex(#"\b(?:join|attach|using|use|with)\s+(?:the\s+)?([a-z]+(?:\s[a-z]+)?)\s+(?:yarn|colou?r)\b"#)
+    private static let onTopOf = regex(#"\b(?:sew|attach|place|put|stitch)\b.*?\b(?:on|onto|to|over)\s+(?:the\s+)?(top|bottom)\s+of\b"#)
+
+    /// Every round-by-round piece in the pattern. Round numbers starting over (R1 again) begin a
+    /// new piece, named after the short heading line above it ("HEAD", "Body:"). Also reads colour
+    /// changes, taller stitches, collars, eyes, and where pieces are sewn on.
+    static func read(_ rows: [String]) -> Reading {
         var out: [Piece] = []
         var current = Piece(id: 0, name: "", counts: [])
         var name: String?
         var lastNumber = 0
         var lastHeading: String?
+        var colorNames: [String] = ["main"]
         var color = 0
-        var sewLines: [(text: String, rounds: ClosedRange<Int>)] = []
+        var sewLines: [(text: String, rounds: ClosedRange<Int>?, place: Piece.Attach.Place, line: Int)] = []
+
+        func colorIndex(_ raw: String) -> Int {
+            let name = raw.trimmingCharacters(in: .whitespaces)
+            if let i = colorNames.firstIndex(of: name) { return i }
+            colorNames.append(name)
+            return colorNames.count - 1
+        }
+
+        /// A colour change anywhere in a line: "Change to white", "join pink yarn", "color change".
+        func readColor(_ line: String) -> Int? {
+            let lower = line.lowercased()
+            let ns = lower as NSString
+            let range = NSRange(location: 0, length: ns.length)
+            if let m = changeTo.firstMatch(in: lower, range: range) {
+                return colorIndex(ns.substring(with: m.range(at: 1)))
+            }
+            if let m = joinColor.firstMatch(in: lower, range: range) {
+                let phrase = ns.substring(with: m.range(at: 1))
+                if YarnColor.rgb(phrase) != nil || phrase.hasPrefix("color") || phrase.hasPrefix("colour") {
+                    return colorIndex(phrase)
+                }
+            }
+            if (lower.contains("color") || lower.contains("colour")) && (lower.contains("change") || lower.contains("switch")) {
+                return colorIndex("color \(colorNames.count + 1)")
+            }
+            return nil
+        }
 
         func close() {
             guard current.counts.count >= 3, let first = current.counts.first, first <= 24 else { return }
@@ -262,16 +313,13 @@ enum PatternToShape {
             if a > 0 { current.eyes = .init(rounds: min(a, b)...max(a, b), apart: apart) }
         }
 
-        for line in split(rows) {
+        for (lineIndex, line) in split(rows) {
             readEyes(line)
             let ns = line as NSString
             let range = NSRange(location: 0, length: ns.length)
             guard let m = label.firstMatch(in: line, range: range) ?? numbered.firstMatch(in: line, range: range) else {
                 let lower = line.lowercased()
-                if (lower.contains("color") || lower.contains("colour")),
-                   lower.contains("change") || lower.contains("switch") {
-                    color += 1
-                }
+                if let c = readColor(line) { color = c }
                 if let f = frontLoopsOf.firstMatch(in: line, range: range), !current.counts.isEmpty {
                     let round = Int(ns.substring(with: f.range(at: 1))) ?? 0
                     var count: Int?
@@ -279,12 +327,15 @@ enum PatternToShape {
                         let g = c.range(at: 1).location != NSNotFound ? c.range(at: 1) : c.range(at: 2)
                         count = Int(ns.substring(with: g))
                     }
-                    current.collars.append(.init(round: round, count: count))
+                    current.collars.append(.init(round: round, count: count, line: lineIndex))
                 }
                 if let sew = sewBetween.firstMatch(in: line, range: range) {
                     let a = Int(ns.substring(with: sew.range(at: 1))) ?? 0
                     let b = Int(ns.substring(with: sew.range(at: 2))) ?? a
-                    if a > 0 { sewLines.append((lower, min(a, b)...max(a, b))) }
+                    if a > 0 { sewLines.append((lower, min(a, b)...max(a, b), .between, lineIndex)) }
+                } else if let top = onTopOf.firstMatch(in: lower, range: NSRange(location: 0, length: (lower as NSString).length)) {
+                    let word = (lower as NSString).substring(with: top.range(at: 1))
+                    sewLines.append((lower, nil, word == "top" ? .top : .bottom, lineIndex))
                 }
                 let heading = line.trimmingCharacters(in: CharacterSet(charactersIn: " :-*#\t"))
                 if !heading.isEmpty, heading.count < 40 { lastHeading = heading }
@@ -297,7 +348,15 @@ enum PatternToShape {
                 current = Piece(id: 0, name: "", counts: [])
                 color = 0
             }
-            if current.counts.isEmpty { name = lastHeading }
+            if current.counts.isEmpty {
+                name = lastHeading
+                // "Hat (white)": a colour in the heading is the piece's colour.
+                if let heading = lastHeading, YarnColor.rgb(heading) != nil, let word = YarnColor.colorWord(in: heading) {
+                    color = colorIndex(word)
+                }
+            }
+            // A change at the start of a round line ("8. Change to tan, sc around (24)").
+            if let c = readColor(line) { color = c }
             let rest = ns.substring(from: m.range.location + m.range.length)
             guard let c = count(rest: rest, line: line, prev: current.counts.last), c > 0, c < 2000 else { continue }
             let times = max(1, min(200, b - a + 1))
@@ -305,50 +364,51 @@ enum PatternToShape {
             current.counts.append(contentsOf: Array(repeating: c, count: times))
             current.heights.append(contentsOf: Array(repeating: height, count: times))
             current.colors.append(contentsOf: Array(repeating: color, count: times))
+            current.lines.append(contentsOf: Array(repeating: lineIndex, count: times))
             lastNumber = max(a, b)
         }
         close()
 
-        // "Sew on ears between rounds 4 & 6 of head": the piece named in the line goes onto the
-        // biggest piece (or the one named after "of").
+        // "Sew on ears between rounds 4 & 6 of head", "Sew the hat on top of the head": the piece
+        // named in the line goes onto the biggest piece (or the one named after "of").
         if let main = out.indices.max(by: { out[$0].counts.reduce(0, +) < out[$1].counts.reduce(0, +) }) {
+            func key(_ name: String) -> String {
+                let word = name.lowercased().split(whereSeparator: { !$0.isLetter }).first.map(String.init) ?? ""
+                return word.hasSuffix("s") ? String(word.dropLast()) : word
+            }
             for sew in sewLines {
-                func key(_ name: String) -> String {
-                    let word = name.lowercased().split(whereSeparator: { !$0.isLetter }).first.map(String.init) ?? ""
-                    return word.hasSuffix("s") ? String(word.dropLast()) : word
-                }
                 guard let source = out.indices.first(where: { $0 != main && !key(out[$0].name).isEmpty
                                                               && sew.text.contains(key(out[$0].name)) }) else { continue }
                 var target = main
-                if let ofRange = sew.text.range(of: " of ") {
+                if let ofRange = sew.text.range(of: " of ", options: .backwards) {
                     let after = String(sew.text[ofRange.upperBound...])
                     if let t = out.indices.first(where: { $0 != source && !key(out[$0].name).isEmpty && after.contains(key(out[$0].name)) }) {
                         target = t
                     }
                     if after.contains("head") {
-                        out[target].topDown = true
+                        if sew.place == .between { out[target].topDown = true }
                         if out[target].name.hasPrefix("Piece ") { out[target].name = "Head" }
                     }
                 }
-                out[source].attach = .init(target: target, rounds: sew.rounds)
+                out[source].attach = .init(target: target, rounds: sew.rounds, place: sew.place, line: sew.line)
             }
         }
-        return out
+        return Reading(pieces: out, colorNames: colorNames)
     }
 
-    private static func split(_ rows: [String]) -> [String] {
-        var out: [String] = []
-        for row in rows {
+    /// Lines with their index in `rows`; several rounds pasted on one line are split apart.
+    private static func split(_ rows: [String]) -> [(Int, String)] {
+        var out: [(Int, String)] = []
+        for (index, row) in rows.enumerated() {
             let ns = row as NSString
             var start = 0
             for m in inlineSplit.matches(in: row, range: NSRange(location: 0, length: ns.length)) {
-                let piece = ns.substring(with: NSRange(location: start, length: m.range.location - start))
-                out.append(piece)
+                out.append((index, ns.substring(with: NSRange(location: start, length: m.range.location - start))))
                 start = m.range.location
             }
-            out.append(ns.substring(from: start))
+            out.append((index, ns.substring(from: start)))
         }
-        return out.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return out.map { ($0.0, $0.1.trimmingCharacters(in: .whitespaces)) }.filter { !$0.1.isEmpty }
     }
 
     private static func group(_ m: NSTextCheckingResult, _ i: Int, in ns: NSString) -> String? {
@@ -417,12 +477,13 @@ struct StitchModel: Equatable {
     /// Each round's circumference sets its radius; each round adds one row height along the
     /// surface, so increases flatten it out and decreases pull it in, like real fabric.
     static func from(counts: [Int], gauge: Gauge, heights: [Double] = [], colors: [Int] = [],
-                     collars: [PatternToShape.Piece.Collar] = [], puff: Double = 0) -> StitchModel {
+                     collars: [PatternToShape.Piece.Collar] = [], puff: Double = 0,
+                     closeEnd: Bool = true) -> StitchModel {
         let n = counts.count
         guard n > 0 else { return StitchModel(bands: []) }
         let radius = counts.map { Double($0) * gauge.w / (2 * Double.pi) }
         let rowH = (0..<n).map { gauge.h * ($0 < heights.count ? heights[$0] : 1) }
-        let closed = counts[n - 1] <= 12
+        let closed = closeEnd && counts[n - 1] <= 12
 
         // Flat fabric: each round adds one row height along the surface, so increases lie flat
         // and straight rounds go straight up. z[i] = height of round i's top edge.

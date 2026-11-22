@@ -197,6 +197,7 @@ struct PatternDetailView: View {
     @EnvironmentObject var app: AppState
     @State private var editing: UserPattern?
     @State private var confirmReset = false
+    @AppStorage("patternShow3D") private var show3D = true
 
     /// The latest version, if it's one of the user's own patterns that has been edited.
     private var current: PatternContent {
@@ -221,8 +222,31 @@ struct PatternDetailView: View {
         let p = current
         let rows = orderedRows(p)
         let next = rows.first { !store.isDone(pattern: p.id, row: $0.id) }
+        let reading = PatternToShape.read(p.shapeLines)
         ScrollViewReader { proxy in
         List {
+            if !reading.pieces.isEmpty {
+                SwiftUI.Section {
+                    if show3D {
+                        // What you've made so far (ticked rounds), the next round glowing, to hold
+                        // up against the real thing.
+                        PatternPreview3D(reading: reading,
+                                         lineVisible: { store.isDone(pattern: p.id, row: $0) },
+                                         highlightLine: next?.id,
+                                         emptyMessage: "Tick rounds as you make them and the piece builds up here.")
+                            .frame(height: 260)
+                            .listRowInsets(EdgeInsets())
+                    }
+                    progressCounters(p, reading: reading, next: next)
+                } header: {
+                    HStack {
+                        Text("Made so far")
+                        Spacer()
+                        Button(show3D ? "Hide 3D" : "Show 3D") { withAnimation { show3D.toggle() } }
+                            .font(.caption)
+                    }
+                }
+            }
             if p.summary != nil || !p.materials.isEmpty || p.notes != nil {
                 SwiftUI.Section {
                     if let summary = p.summary { Text(summary) }
@@ -239,7 +263,7 @@ struct PatternDetailView: View {
             }
 
             SwiftUI.Section {
-                counter(p)
+                if reading.pieces.isEmpty { counter(p) }
                 if let videoID = p.videoID {
                     Button { app.open(videoID: videoID, store: store) } label: {
                         Label("Watch the video", systemImage: "play.rectangle.fill")
@@ -309,6 +333,37 @@ struct PatternDetailView: View {
             Button("Clear ticks and counter", role: .destructive) { store.resetProgress(pattern: p.id) }
         }
         .sheet(item: $editing) { PatternEditor(pattern: $0) }
+    }
+
+    /// Where you are in the piece: which round is next and how many stitches it should have,
+    /// with the round counter, under the 3D.
+    @ViewBuilder
+    private func progressCounters(_ p: PatternContent, reading: PatternToShape.Reading,
+                                  next: (id: Int, text: String)?) -> some View {
+        if let next, let piece = reading.pieces.first(where: { $0.lines.contains(next.id) }),
+           let round = piece.lines.firstIndex(of: next.id) {
+            let doneRounds = piece.lines.prefix(round).count
+            let stitchesSoFar = piece.counts.prefix(round).reduce(0, +)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(piece.name).font(.headline)
+                    Text("round \(round + 1) of \(piece.counts.count)").font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(piece.counts[round]) st").font(.title2.monospacedDigit().weight(.bold))
+                }
+                HStack(spacing: 14) {
+                    Label("\(doneRounds) rounds done", systemImage: "checkmark.circle")
+                    Label("\(stitchesSoFar) stitches so far", systemImage: "number")
+                    if piece.repeatCount > 1 { Label("make \(piece.repeatCount)", systemImage: "square.on.square") }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
+        } else if next == nil {
+            Label("All done!", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+        }
+        counter(p)
     }
 
     /// The next row to do, with a big Done button, always on screen.
@@ -434,12 +489,12 @@ struct PatternEditor: View {
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
     @State var pattern: UserPattern
-    /// The pattern as read so far, for the live 3D preview (updated shortly after you stop typing).
-    @State private var pieces: [PatternToShape.Piece] = []
+    /// The pattern as read so far (updated just after you stop typing).
+    @State private var reading = PatternToShape.Reading(pieces: [], colorNames: ["main"])
+    @State private var cursor = 0
     @State private var showPreview = true
-    @State private var flip: Bool?
-    @State private var color1 = Color(red: 0.55, green: 0.85, blue: 0.80)
-    @State private var color2 = Color(red: 0.78, green: 0.72, blue: 0.62)
+    /// Show the whole pattern instead of following the cursor.
+    @State private var showAll = false
 
     var body: some View {
         NavigationStack {
@@ -454,7 +509,7 @@ struct PatternEditor: View {
                 } else {
                     VStack(spacing: 0) {
                         if showPreview {
-                            preview.frame(height: min(280, geo.size.height * 0.38))
+                            preview.frame(height: min(300, geo.size.height * 0.4))
                             Divider()
                         }
                         form
@@ -464,10 +519,9 @@ struct PatternEditor: View {
             .navigationTitle(pattern.title.isEmpty ? "New pattern" : pattern.title)
             .navigationBarTitleDisplayMode(.inline)
             .task(id: pattern.body) {
-                try? await Task.sleep(nanoseconds: 350_000_000)
+                try? await Task.sleep(nanoseconds: 300_000_000)
                 guard !Task.isCancelled else { return }
-                let lines = pattern.body.split(separator: "\n").map(String.init)
-                pieces = PatternToShape.pieces(from: lines)
+                reading = PatternToShape.read(pattern.rows)
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -508,13 +562,12 @@ struct PatternEditor: View {
                 }
             }
             SwiftUI.Section {
-                TextEditor(text: $pattern.body)
-                    .frame(minHeight: 260)
-                    .font(.body.monospaced())
+                PatternTextView(text: $pattern.body, cursor: $cursor)
+                    .frame(minHeight: 320)
             } header: {
                 Text("Rows")
             } footer: {
-                Text("One row or step per line, e.g. \"3. Sc, inc (18)\". Headings like \"Ears x2\" start a new piece; \"Color change\", \"Sew on ears between rounds 4 & 6 of head\" and \"Safety eyes between 6 & 7\" show up in the 3D preview.")
+                Text("One row or step per line, e.g. \"3. Sc, inc (18)\". The 3D crochets along as you write, up to the line you're on. Headings like \"Ears x2 (green)\" start a new piece; \"Change to white\", \"Safety eyes between 6 & 7\", \"Sew ears between rounds 4 & 6 of head\" and \"Sew the hat on top of the head\" all show up in 3D.")
             }
             SwiftUI.Section("Notes") {
                 TextEditor(text: $pattern.notes).frame(minHeight: 80)
@@ -522,44 +575,20 @@ struct PatternEditor: View {
         }
     }
 
-    @ViewBuilder
     private var preview: some View {
-        let assembly = Assembly.build(pieces: pieces, gauge: Gauge(), flip: flip)
-        ZStack(alignment: .bottom) {
-            if assembly.parts.isEmpty {
-                Color(.secondarySystemBackground)
-                VStack(spacing: 6) {
-                    Image(systemName: "cube.transparent").font(.title)
-                    Text("Type rounds with their stitch counts, like \"1. 6 sc in MR (6)\", and the piece takes shape here.")
-                        .font(.footnote)
-                        .multilineTextAlignment(.center)
+        let position = PatternTextView.line(in: pattern.body, cursor: cursor)
+        let upTo = position.upTo
+        return PatternPreview3D(reading: reading,
+                                lineVisible: showAll ? nil : { $0 <= upTo },
+                                highlightLine: showAll ? nil : position.current)
+            .overlay(alignment: .topTrailing) {
+                Picker("Show", selection: $showAll) {
+                    Text("So far").tag(false)
+                    Text("All").tag(true)
                 }
-                .foregroundStyle(.secondary)
-                .padding()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                AssemblySceneView(assembly: assembly, palette: [UIColor(color1), UIColor(color2), .white])
-                HStack(spacing: 8) {
-                    ColorPicker("", selection: $color1, supportsOpacity: false).labelsHidden()
-                    if assembly.colorCount > 1 {
-                        ColorPicker("", selection: $color2, supportsOpacity: false).labelsHidden()
-                    }
-                    Text(summary(assembly)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                    Spacer()
-                    Button { flip = !assembly.mainTopDown } label: {
-                        Label("Flip", systemImage: "arrow.up.arrow.down").font(.caption.weight(.semibold))
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
+                .pickerStyle(.segmented)
+                .frame(width: 140)
                 .padding(8)
-                .background(.ultraThinMaterial)
             }
-        }
-    }
-
-    private func summary(_ assembly: Assembly) -> String {
-        let names = pieces.map { $0.repeatCount > 1 ? "\($0.name)" : $0.name }
-        return names.joined(separator: " · ") + " · experimental"
     }
 }
