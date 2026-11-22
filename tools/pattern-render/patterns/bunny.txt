@@ -1,0 +1,44 @@
+HEAD (white)
+Rnd 1: 6 sc in magic ring (6)
+Rnd 2: inc in each st around (12)
+Rnd 3: *sc, inc* repeat 6 times (18)
+Rnd 4: *2 sc, inc* repeat 6 times (24)
+Rnd 5: *3 sc, inc* repeat 6 times (30)
+Rnds 6-11: sc around (30)
+Place safety eyes between rounds 9 and 10, 7 sts apart.
+Rnd 12: *3 sc, dec* repeat 6 times (24)
+Rnd 13: *2 sc, dec* repeat 6 times (18)
+Stuff the head.
+Rnd 14: *sc, dec* repeat 6 times (12)
+Rnd 15: dec around (6)
+Fasten off.
+BODY (white)
+Rnd 1: 6 sc in magic ring (6)
+Rnd 2: inc around (12)
+Rnd 3: *sc, inc* x6 (18)
+Rnd 4: *2 sc, inc* x6 (24)
+Rnds 5-9: sc around (24)
+Rnd 10: *2 sc, dec* x6 (18)
+Rnds 11-12: sc around (18)
+Fasten off, leave a long tail. Stuff.
+EARS (make 2) (pink)
+Rnd 1: 6 sc in magic ring (6)
+Rnd 2: *sc, inc* x3 (9)
+Rnd 3: *2 sc, inc* x3 (12)
+Rnds 4-12: sc around (12)
+Rnd 13: *2 sc, dec* x3 (9)
+Fasten off. Do not stuff.
+ARMS (make 2) (white)
+Rnd 1: 6 sc in magic ring (6)
+Rnds 2-7: sc around (6)
+Fasten off.
+LEGS (make 2) (white)
+Rnd 1: 6 sc in magic ring (6)
+Rnd 2: inc around (12)
+Rnds 3-5: sc around (12)
+Rnd 6: dec around (6)
+ASSEMBLY
+Sew the ears to the top of the head between rounds 3 and 4.
+Sew the head to the body.
+Sew the arms to the sides of the body between rounds 10 and 11.
+Sew the legs to the bottom of the body.

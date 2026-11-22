@@ -1,0 +1,46 @@
+Head
+R1: MR 6 sc (6)
+R2: inc x 6 (12)
+R3: (1 sc, inc) x 6 (18)
+R4: (2 sc, inc) x 6 (24)
+R5: (3 sc, inc) x 6 (30)
+R6: (4 sc, inc) x 6 (36)
+R7-R13: 36 sc (36)
+Safety eyes between R10 and R11, 6 st apart
+R14: (4 sc, dec) x 6 (30)
+R15: (3 sc, dec) x 6 (24)
+R16: (2 sc, dec) x 6 (18)
+R17: (1 sc, dec) x 6 (12)
+R18: dec x 6 (6)
+Muzzle (cream)
+R1: MR 6 sc (6)
+R2: inc x 6 (12)
+R3: (1 sc, inc) x 6 (18)
+R4: 18 sc (18)
+Sew the muzzle between R11 and R14 of the head.
+Ears x2
+R1: MR 6 sc (6)
+R2: inc x 6 (12)
+R3-R4: 12 sc (12)
+Sew ears between R4 and R6 of the head
+Body
+R1: MR 6 sc (6)
+R2: inc x 6 (12)
+R3: (1 sc, inc) x 6 (18)
+R4: (2 sc, inc) x 6 (24)
+R5: (3 sc, inc) x 6 (30)
+R6-R11: 30 sc (30)
+R12: (3 sc, dec) x 6 (24)
+R13-R14: 24 sc (24)
+R15: (2 sc, dec) x 6 (18)
+Sew head to body.
+Arms x2
+R1: MR 6 sc (6)
+R2: (1 sc, inc) x 3 (9)
+R3-R9: 9 sc (9)
+Sew arms between R13 and R14 of the body.
+Legs x2
+R1: MR 6 sc (6)
+R2: inc x 6 (12)
+R3-R6: 12 sc (12)
+Sew legs to the bottom of the body.

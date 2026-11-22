@@ -9,6 +9,9 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
 
 data = json.load(open(sys.argv[1]))
+if not data["vertices"]:
+    fig = plt.figure(figsize=(6, 2)); fig.text(0.5, 0.5, "nothing to draw (no round-by-round pieces)", ha="center")
+    plt.savefig(sys.argv[2]); print("saved", sys.argv[2]); sys.exit(0)
 V = np.array(data["vertices"], dtype=float)
 T = np.array(data["triangles"], dtype=int)
 palette = [tuple(c) for c in data.get("palette", [])] or [(0.56, 0.85, 0.8), (0.78, 0.72, 0.62), (0.93, 0.93, 0.93)]

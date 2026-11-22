@@ -200,7 +200,9 @@ enum PatternToShape {
             var place: Place = .between
             /// The pattern line that says to sew it on.
             var line: Int = 0
-            enum Place: Equatable { case between, top, bottom }
+            /// between: at the given rounds; auto: decided by the piece's name (head on top,
+            /// legs below, tail behind…).
+            enum Place: Equatable { case between, top, bottom, sides, front, back, auto }
         }
     }
 
@@ -329,13 +331,10 @@ enum PatternToShape {
                     }
                     current.collars.append(.init(round: round, count: count, line: lineIndex))
                 }
-                if let sew = sewBetween.firstMatch(in: line, range: range) {
-                    let a = Int(ns.substring(with: sew.range(at: 1))) ?? 0
-                    let b = Int(ns.substring(with: sew.range(at: 2))) ?? a
-                    if a > 0 { sewLines.append((lower, min(a, b)...max(a, b), .between, lineIndex)) }
-                } else if let top = onTopOf.firstMatch(in: lower, range: NSRange(location: 0, length: (lower as NSString).length)) {
-                    let word = (lower as NSString).substring(with: top.range(at: 1))
-                    sewLines.append((lower, nil, word == "top" ? .top : .bottom, lineIndex))
+                // Assembly: one instruction per sentence ("Sew the head to the body. Sew the tail…").
+                for sentence in lower.components(separatedBy: CharacterSet(charactersIn: ".;!")) {
+                    guard let sew = readSewing(sentence) else { continue }
+                    sewLines.append((sentence, sew.rounds, sew.place, lineIndex))
                 }
                 let heading = line.trimmingCharacters(in: CharacterSet(charactersIn: " :-*#\t"))
                 if !heading.isEmpty, heading.count < 40 { lastHeading = heading }
@@ -369,31 +368,78 @@ enum PatternToShape {
         }
         close()
 
-        // "Sew on ears between rounds 4 & 6 of head", "Sew the hat on top of the head": the piece
-        // named in the line goes onto the biggest piece (or the one named after "of").
-        if let main = out.indices.max(by: { out[$0].counts.reduce(0, +) < out[$1].counts.reduce(0, +) }) {
-            func key(_ name: String) -> String {
-                let word = name.lowercased().split(whereSeparator: { !$0.isLetter }).first.map(String.init) ?? ""
-                return word.hasSuffix("s") ? String(word.dropLast()) : word
+        // Assembly: "Sew the legs to the bottom of the body", "Sew ears between rounds 4 & 6 of
+        // head". The piece being sewn is named before "to"/"on"/"between"; the piece it goes on
+        // after (or, if none is named there, the biggest piece).
+        func keys(_ name: String) -> [String] {
+            let words = name.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init)
+                .filter { !["make", "the", "and", "of", "x"].contains($0) && YarnColor.colorWord(in: $0) == nil }
+            guard let first = words.first else { return [] }
+            var out = [first]
+            if first.hasSuffix("s") { out.append(String(first.dropLast())) }
+            if first.hasSuffix("ves") { out.append(String(first.dropLast(3)) + "f") }   // leaves → leaf
+            return out
+        }
+        func mentions(_ text: String, _ piece: Piece) -> Range<String.Index>? {
+            for k in keys(piece.name) {
+                if let r = text.range(of: "\\b\(k)s?\\b", options: .regularExpression) { return r }
             }
-            for sew in sewLines {
-                guard let source = out.indices.first(where: { $0 != main && !key(out[$0].name).isEmpty
-                                                              && sew.text.contains(key(out[$0].name)) }) else { continue }
-                var target = main
-                if let ofRange = sew.text.range(of: " of ", options: .backwards) {
-                    let after = String(sew.text[ofRange.upperBound...])
-                    if let t = out.indices.first(where: { $0 != source && !key(out[$0].name).isEmpty && after.contains(key(out[$0].name)) }) {
-                        target = t
-                    }
-                    if after.contains("head") {
-                        if sew.place == .between { out[target].topDown = true }
-                        if out[target].name.hasPrefix("Piece ") { out[target].name = "Head" }
-                    }
-                }
-                out[source].attach = .init(target: target, rounds: sew.rounds, place: sew.place, line: sew.line)
+            return nil
+        }
+        var headHint = false
+        for sew in sewLines {
+            let text = sew.text
+            // The first piece named is the one being sewn on; the last other piece named is where
+            // it goes ("Sew on ears between rounds 4 & 6 of head", "Sew the legs to the bottom of
+            // the body").
+            let named = out.indices.compactMap { i in mentions(text, out[i]).map { (i, $0.lowerBound) } }
+                .sorted { $0.1 < $1.1 }
+            guard let source = named.first?.0 else { continue }
+            let target = named.last(where: { $0.0 != source })?.0
+            if target == nil && text.contains("head") { headHint = true }
+            out[source].attach = .init(target: target ?? -1, rounds: sew.rounds, place: sew.place, line: sew.line)
+        }
+        // The piece everything else hangs off: one not sewn onto anything, with the most sewn onto
+        // it (then the biggest).
+        func total(_ i: Int) -> Int { out[i].counts.reduce(0, +) }
+        let roots = out.indices.filter { out[$0].attach == nil || out[$0].attach?.target == $0 }
+        let main = roots.max { a, b in
+            let na = out.filter { $0.attach?.target == a }.count, nb = out.filter { $0.attach?.target == b }.count
+            return na != nb ? na < nb : total(a) < total(b)
+        } ?? out.indices.max { total($0) < total($1) }
+        if let main {
+            for i in out.indices where out[i].attach?.target == -1 {
+                if i == main { out[i].attach = nil } else { out[i].attach?.target = main }
             }
         }
+        // An unnamed main piece that things are sewn to "of head" is the head.
+        if headHint, let main, out[main].name.hasPrefix("Piece ") { out[main].name = "Head" }
+        // A head is begun at its crown; other pieces start at the bottom.
+        for i in out.indices where out[i].name.lowercased().contains("head") { out[i].topDown = true }
         return Reading(pieces: out, colorNames: colorNames)
+    }
+
+    private static let sewVerb = regex(#"\b(?:sew|attach|pin|place|put|stitch|join|glue)\b"#)
+    private static let roundsBetween = regex(#"(?:rounds?|rnds?|rows?|r)\s*(\d+)\s*(?:&|and|-|–|to)\s*(?:rounds?|rnds?|rows?|r)?\s*(\d+)"#)
+
+    /// One assembly instruction: where on the other piece it goes.
+    private static func readSewing(_ sentence: String) -> (rounds: ClosedRange<Int>?, place: Piece.Attach.Place)? {
+        let ns = sentence as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        guard sewVerb.firstMatch(in: sentence, range: range) != nil,
+              !sentence.contains("eye") else { return nil }
+        if let m = roundsBetween.firstMatch(in: sentence, range: range) {
+            let a = Int(ns.substring(with: m.range(at: 1))) ?? 0
+            let b = Int(ns.substring(with: m.range(at: 2))) ?? a
+            if a > 0 { return (min(a, b)...max(a, b), .between) }
+        }
+        func has(_ w: String) -> Bool { sentence.range(of: "\\b\(w)\\b", options: .regularExpression) != nil }
+        if has("top") { return (nil, .top) }
+        if has("bottom") || has("underside") || has("base") { return (nil, .bottom) }
+        if has("back") || has("behind") || has("rear") { return (nil, .back) }
+        if has("front") || has("face") { return (nil, .front) }
+        if has("sides?") { return (nil, .sides) }
+        return (nil, .auto)
     }
 
     /// Lines with their index in `rows`; several rounds pasted on one line are split apart.
@@ -478,12 +524,12 @@ struct StitchModel: Equatable {
     /// surface, so increases flatten it out and decreases pull it in, like real fabric.
     static func from(counts: [Int], gauge: Gauge, heights: [Double] = [], colors: [Int] = [],
                      collars: [PatternToShape.Piece.Collar] = [], puff: Double = 0,
-                     closeEnd: Bool = true) -> StitchModel {
+                     closeEnd: Bool = true, closeAt: Int = 12) -> StitchModel {
         let n = counts.count
         guard n > 0 else { return StitchModel(bands: []) }
         let radius = counts.map { Double($0) * gauge.w / (2 * Double.pi) }
         let rowH = (0..<n).map { gauge.h * ($0 < heights.count ? heights[$0] : 1) }
-        let closed = closeEnd && counts[n - 1] <= 12
+        let closed = closeEnd && counts[n - 1] <= closeAt
 
         // Flat fabric: each round adds one row height along the surface, so increases lie flat
         // and straight rounds go straight up. z[i] = height of round i's top edge.
@@ -507,7 +553,10 @@ struct StitchModel: Equatable {
             var m = n - 1
             while m - 1 >= 0 && counts[m - 1] > counts[m] { m -= 1 }
             if m < k { m = k }
-            if k >= 1 {
+            // Only where the increases lie flat (a circle: 6, 12, 18…). A slow increase (4, 6, 9, 12)
+            // is already a cone and stays one.
+            let flatStart = k >= 1 && radius[k] / Double(k + 1) > 0.7 * (rowH[0...k].reduce(0, +) / Double(k + 1))
+            if flatStart {
                 let R = radius[k]
                 let D = rowH[0...k].reduce(0, +) * 0.85
                 for i in 0...k {
@@ -523,7 +572,8 @@ struct StitchModel: Equatable {
                     z[i] = last
                 }
             }
-            if closed && m < n - 1 {
+            let flatEnd = m < n - 1 && (radius[m] - radius[n - 1]) / Double(n - 1 - m) > 0.7 * gauge.h
+            if closed && m < n - 1 && flatEnd {
                 let R2 = radius[m]
                 let D2 = (rowH[(m + 1)..<n].reduce(0, +) + gauge.h * 0.3) * 0.85
                 for i in (m + 1)..<n {
@@ -548,7 +598,8 @@ struct StitchModel: Equatable {
             var pts = [SIMD2<Double>(0, 0)] + (0..<n).map { SIMD2(radius[$0], z[$0]) }
             if closed { pts.append(SIMD2(0, capZ)) }
             let widest = radius.max() ?? 0
-            let passes = puff >= 0.5 ? 6 : 3
+            // Few rounds, little smoothing: a 3-round beak would otherwise melt into a disc.
+            let passes = min(puff >= 0.5 ? 6 : 3, max(0, n / 2 - 1))
             for _ in 0..<passes where pts.count > 2 {
                 var next = pts
                 for j in 1..<(pts.count - 1) {

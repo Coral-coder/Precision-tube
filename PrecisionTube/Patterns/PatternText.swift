@@ -23,7 +23,10 @@ enum PatternHeading {
     ]
 
     static func isHeading(_ line: String) -> Bool {
-        let t = line.trimmingCharacters(in: .whitespaces)
+        // "ARMS (make 2)", "Ears (pink)": the bracketed note doesn't stop it being a heading.
+        let t = line.replacingOccurrences(of: #"\s*\((?:make\s+\w+|x\s?\d+|\d+\s?x|[a-z ]+)\)"#,
+                                          with: "", options: [.regularExpression, .caseInsensitive])
+            .trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty, t.count <= 40, let first = t.first, !first.isNumber else { return false }
         if t.hasSuffix(":") { return true }
         if t.hasSuffix(".") || t.contains("(") { return false }
@@ -36,8 +39,17 @@ enum PatternHeading {
         return words.allSatisfy { w in !w.contains(where: \.isNumber) || multiplier(in: w) != nil }
     }
 
+    /// "Ears x2", "ARMS (make 2)", "legs × 4", "make two", "2 pieces".
     static func multiplier(in text: String) -> Int? {
-        let lower = text.lowercased()
+        let lower = text.lowercased().replacingOccurrences(of: "×", with: "x")
+        let words = ["two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "eight": 8]
+        if let r = lower.range(of: #"\bmake\s+(\d+|two|three|four|five|six|eight)\b"#, options: .regularExpression) {
+            let w = lower[r].split(separator: " ").last.map(String.init) ?? ""
+            return Int(w) ?? words[w]
+        }
+        if let r = lower.range(of: #"\b(\d+)\s+(?:pieces|pcs|of them)\b"#, options: .regularExpression) {
+            return Int(lower[r].filter(\.isNumber))
+        }
         if let r = lower.range(of: #"(?:^|\s|\()x\s?(\d+)"#, options: .regularExpression) {
             return Int(lower[r].filter(\.isNumber))
         }

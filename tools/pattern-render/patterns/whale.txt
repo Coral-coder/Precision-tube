@@ -1,0 +1,22 @@
+Body (blue)
+Rnd 1: 6 sc in MR [6]
+Rnd 2: inc around [12]
+Rnd 3: (sc, inc) around [18]
+Rnd 4: (2 sc, inc) around [24]
+Rnd 5: (3 sc, inc) around [30]
+Rnd 6: (4 sc, inc) around [36]
+Rnds 7-12: sc around [36]
+Safety eyes between rounds 9 and 10, 12 sts apart
+Change to white
+Rnds 13-15: sc around [36]
+Rnd 16: (4 sc, dec) around [30]
+Rnd 17: (3 sc, dec) around [24]
+Rnd 18: (2 sc, dec) around [18]
+Rnd 19: (sc, dec) around [12]
+Rnd 20: dec around [6]
+Tail fins x2 (blue)
+Rnd 1: 6 sc in MR [6]
+Rnd 2: (sc, inc) around [9]
+Rnd 3: (2 sc, inc) around [12]
+Rnds 4-5: sc around [12]
+Sew the tail fins to the back of the body.

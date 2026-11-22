@@ -1,0 +1,33 @@
+HEAD (grey)
+Rnd 1: MR 6 sc [6]
+Rnd 2: inc around [12]
+Rnd 3: [sc, inc] around [18]
+Rnd 4: [2 sc, inc] around [24]
+Rnd 5: [3 sc, inc] around [30]
+Rnd 6: [4 sc, inc] around [36]
+Rnds 7-12: sc around [36]
+Safety eyes between rnds 9 and 10, 6 sts apart.
+Rnd 13: [4 sc, dec] around [30]
+Rnd 14: [3 sc, dec] around [24]
+Rnd 15: [2 sc, dec] around [18]
+Rnd 16: [sc, dec] around [12]
+Rnd 17: dec around [6]
+EARS (make 2) (grey)
+Rnd 1: MR 4 sc [4]
+Rnd 2: [sc, inc] around [6]
+Rnd 3: [sc, inc] around [9]
+Rnd 4: [2 sc, inc] around [12]
+Sew ears between rnds 3 and 6 of the head.
+BODY (grey)
+Rnd 1: MR 6 sc [6]
+Rnd 2: inc around [12]
+Rnd 3: [sc, inc] around [18]
+Rnd 4: [2 sc, inc] around [24]
+Rnd 5: [3 sc, inc] around [30]
+Rnds 6-14: sc around [30]
+Rnd 15: [3 sc, dec] around [24]
+Rnd 16: [2 sc, dec] around [18]
+TAIL (grey)
+Rnd 1: MR 6 sc [6]
+Rnds 2-16: sc around [6]
+Sew the head to the body. Sew the tail to the back of the body.
